@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 
 use super::{
 	CatalogueUse, Command, CommandOutcome, InvocationId, Operation, Paths,
-	Writer,
+	SeriesRecording, Writer,
 	recording::{Observation, ObservationKind, now_ms},
 	snapshot,
 	storage::{ClearRange, Store},
@@ -45,7 +45,11 @@ async fn worker_writer_drain() {
 	wait_for_input("RECORD");
 	let series = series();
 	recorder.record_command(Command::Download, CommandOutcome::Success);
-	recorder.record_series(&series, CatalogueUse::Hit);
+	recorder.record_series(
+		&series,
+		CatalogueUse::Hit,
+		SeriesRecording::IncludeIdentity,
+	);
 	recorder.record_download(
 		&series,
 		&crate::download::Summary {
@@ -65,6 +69,7 @@ async fn worker_writer_drain() {
 			],
 			elapsed: std::time::Duration::from_millis(5),
 		},
+		SeriesRecording::IncludeIdentity,
 	);
 	drop(recorder.measure_items(Operation::SearchRank, 10));
 	barrier("RECORDED");
@@ -317,11 +322,14 @@ fn observation(
 
 fn series() -> Series {
 	Series {
+		source: crate::content::ContentSource::Anime365,
 		id: 365,
 		title: "Series".into(),
 		year: None,
 		type_title: None,
 		number_of_episodes: None,
+		my_anime_list_id: None,
+		anilist_id: None,
 		poster_url_small: None,
 		episodes: Vec::new(),
 	}

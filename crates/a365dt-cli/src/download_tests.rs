@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 use super::{Bars, Job, Outcome, Status, sanitize};
 use crate::{
 	api::{Episode, Translation},
+	content::ContentSource,
 	error::Error,
 	select::PlannedRelease,
 };
@@ -21,11 +22,13 @@ fn distinguishes_full_episode_labels_in_file_names() {
 	let job = |id, episode_int: &str, episode_full: &str| Job {
 		release: PlannedRelease {
 			episode: Episode {
+				source: ContentSource::Anime365,
 				id,
 				episode_int: episode_int.into(),
 				episode_full: episode_full.into(),
 			},
 			translation: Translation {
+				source: ContentSource::Anime365,
 				id,
 				episode_id: id,
 				kind: "sub".into(),

@@ -6,9 +6,9 @@ rust_min_stack := "8388608" # 8 MiB
 help:
     just -l
 
-# `a365dt-dev`
-a365dt *args:
-    cargo run --bin a365dt -- {{ args }}
+# `a365-dev`
+a365 *args:
+    cargo run --bin a365 -- {{ args }}
 
 fmt:
     cargo fmt --all

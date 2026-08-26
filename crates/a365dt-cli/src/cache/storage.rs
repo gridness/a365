@@ -274,6 +274,16 @@ async fn prune_healthy(pool: &SqlitePool) -> Result<(), Error> {
 	.execute(&mut *transaction)
 	.await
 	.map_err(write_error)?;
+	sqlx::query(
+		"UPDATE catalogue_source_state SET \
+		 current_generation = current_generation + 1, \
+		 last_refresh_revision = (\
+			SELECT revision FROM catalogue_state WHERE singleton = 1\
+		 ), refreshed_at = NULL",
+	)
+	.execute(&mut *transaction)
+	.await
+	.map_err(write_error)?;
 	transaction.commit().await.map_err(write_error)
 }
 
@@ -294,7 +304,7 @@ fn authorize_rebuild(permission: RebuildPermission) -> Result<(), Error> {
 			}
 		}
 		RebuildPermission::Ask => Err(Error::new(
-			"The local cache is damaged; run `a365dt cache prune --yes` to rebuild it.",
+			"The local cache is damaged; run `a365 cache prune --yes` to rebuild it.",
 		)),
 	}
 }
@@ -312,14 +322,14 @@ fn u64_from(value: i64, name: &str) -> Result<u64, Error> {
 
 fn read_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not read the local cache; run `a365dt cache prune` to reset it.",
+		"Could not read the local cache; run `a365 cache prune` to reset it.",
 		error,
 	)
 }
 
 fn write_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not update the local cache; run `a365dt cache prune` to reset it.",
+		"Could not update the local cache; run `a365 cache prune` to reset it.",
 		error,
 	)
 }

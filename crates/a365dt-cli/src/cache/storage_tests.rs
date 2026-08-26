@@ -8,12 +8,13 @@ use super::{
 };
 use crate::{
 	api::{Episode, Series},
+	content::ContentSource,
 	telemetry::Recorder,
 };
 
 fn temporary_directory(name: &str) -> std::path::PathBuf {
 	std::env::temp_dir().join(format!(
-		"a365dt-{name}-{}-{}",
+		"a365-{name}-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)
@@ -24,13 +25,17 @@ fn temporary_directory(name: &str) -> std::path::PathBuf {
 
 fn series(id: u64, title: &str) -> Series {
 	Series {
+		source: ContentSource::Anime365,
 		id,
 		title: title.into(),
 		year: Some(2020),
 		type_title: Some("TV".into()),
 		number_of_episodes: Some(24),
+		my_anime_list_id: Some(52_991),
+		anilist_id: Some(154_587),
 		poster_url_small: Some("https://example.com/poster.jpg".into()),
 		episodes: vec![Episode {
+			source: ContentSource::Anime365,
 			id: 70,
 			episode_int: "1".into(),
 			episode_full: "Episode 1".into(),
@@ -78,13 +83,19 @@ async fn stores_the_catalogue_projection_without_episode_or_poster_details() {
 	let mut expected = stored.clone();
 	expected.poster_url_small = None;
 	expected.episodes.clear();
+	let mut stored_h365 = series(7, "H365 title");
+	stored_h365.source = ContentSource::H365;
+	let mut expected_h365 = stored_h365.clone();
+	expected_h365.poster_url_small = None;
+	expected_h365.episodes.clear();
 	let (_, writer) = store
 		.load_catalogue()
 		.await
 		.unwrap()
 		.into_session(&store, Recorder::default());
-	writer.commit_refresh(vec![stored.clone()]);
-	writer.remember_alias("jjk".into(), stored);
+	writer.commit_refresh(ContentSource::Anime365, vec![stored]);
+	writer.commit_refresh(ContentSource::H365, vec![stored_h365.clone()]);
+	writer.remember_alias("hidden alias".into(), stored_h365);
 	writer.finish().await.unwrap();
 	assert!(directory.join("cache.sqlite").exists());
 
@@ -94,13 +105,22 @@ async fn stores_the_catalogue_projection_without_episode_or_poster_details() {
 		.unwrap()
 		.into_session(&store, Recorder::default());
 	writer.finish().await.unwrap();
-	let suggestions = loaded.suggestions("jjk", &[], &Recorder::default());
+	let suggestions =
+		loaded.suggestions("hidden alias", &[], &Recorder::default());
 	assert_eq!(
 		(0..suggestions.matches().len())
 			.filter_map(|position| suggestions.series(position))
 			.cloned()
 			.collect::<Vec<_>>(),
-		vec![expected]
+		vec![expected_h365.clone()]
+	);
+	let suggestions = loaded.suggestions("", &[], &Recorder::default());
+	assert_eq!(
+		(0..suggestions.matches().len())
+			.filter_map(|position| suggestions.series(position))
+			.cloned()
+			.collect::<Vec<_>>(),
+		vec![expected, expected_h365]
 	);
 	store.close().await;
 	fs::remove_dir_all(directory).unwrap();
@@ -143,7 +163,10 @@ async fn refresh_skips_untitled_series_without_rolling_back_the_catalogue() {
 		.await
 		.unwrap()
 		.into_session(&store, Recorder::default());
-	writer.commit_refresh(vec![series(1, ""), series(2, "Cacheable")]);
+	writer.commit_refresh(
+		ContentSource::Anime365,
+		vec![series(1, ""), series(2, "Cacheable")],
+	);
 	writer.finish().await.unwrap();
 
 	let inspection = store.inspect().await;
@@ -222,7 +245,7 @@ async fn prunes_cache_idempotently_without_removing_the_database() {
 		.await
 		.unwrap()
 		.into_session(&store, Recorder::default());
-	writer.commit_refresh(vec![series(1, "Cached")]);
+	writer.commit_refresh(ContentSource::Anime365, vec![series(1, "Cached")]);
 	writer.finish().await.unwrap();
 	store.close().await;
 
@@ -256,7 +279,8 @@ async fn prune_blocks_a_refresh_that_started_before_it() {
 	prune_at(&directory, RebuildPermission::Preauthorized)
 		.await
 		.unwrap();
-	stale_refresh.commit_refresh(vec![series(1, "Stale")]);
+	stale_refresh
+		.commit_refresh(ContentSource::Anime365, vec![series(1, "Stale")]);
 	stale_refresh.finish().await.unwrap();
 
 	assert!(matches!(

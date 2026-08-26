@@ -77,9 +77,9 @@ fn infers_managed_installation_channels_from_paths() {
 
 	assert_eq!(
 		[
-			channel("/opt/homebrew/Cellar/a365dt/0.7.0/bin/a365dt"),
-			channel("/Users/me/.cargo/bin/a365dt"),
-			channel("/usr/local/bin/a365dt"),
+			channel("/opt/homebrew/Cellar/a365/0.7.0/bin/a365"),
+			channel("/Users/me/.cargo/bin/a365"),
+			channel("/usr/local/bin/a365"),
 		],
 		[
 			InstallationChannel::Homebrew,

@@ -6,7 +6,7 @@
   "draft": true,
   "packages": {
     ".": {
-      "component": "a365dt",
+      "component": "a365",
       "initial-version": "0.1.0",
       "version-file": "version.txt",
       "extra-files": [

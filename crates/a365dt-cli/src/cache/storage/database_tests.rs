@@ -5,7 +5,7 @@ use super::{open, rebuild};
 #[tokio::test]
 async fn rebuilds_after_a_shared_lock_was_inherited() {
 	let directory = std::env::temp_dir().join(format!(
-		"a365dt-cache-inherited-lock-{}-{}",
+		"a365-cache-inherited-lock-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)

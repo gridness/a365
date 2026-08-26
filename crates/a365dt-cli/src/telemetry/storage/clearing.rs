@@ -51,6 +51,7 @@ async fn delete(
 		"DELETE FROM series_selection_events \
 		 WHERE observed_at_ms >= COALESCE(?, 0)",
 		"DELETE FROM download_batches WHERE observed_at_ms >= COALESCE(?, 0)",
+		"DELETE FROM playback_sessions WHERE observed_at_ms >= COALESCE(?, 0)",
 		"DELETE FROM performance_events WHERE observed_at_ms >= COALESCE(?, 0)",
 	] {
 		sqlx::query(statement)

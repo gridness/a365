@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
 	api::Series,
+	content::{ContentSource, SeriesKey},
 	search::{Search, normalize_query},
 	telemetry::{CatalogueUse, Operation, Recorder},
 };
@@ -21,17 +22,17 @@ struct Index {
 
 #[derive(Debug, Default)]
 pub(crate) struct Catalogue {
-	pub(super) refreshed_at: u64,
+	pub(super) refreshed_at: BTreeMap<ContentSource, u64>,
 	pub(super) series: Vec<Series>,
-	pub(super) aliases: BTreeMap<String, u64>,
-	started_with: HashSet<u64>,
+	pub(super) aliases: BTreeMap<String, SeriesKey>,
+	started_with: HashSet<SeriesKey>,
 	index: Option<Index>,
 }
 
 impl Clone for Catalogue {
 	fn clone(&self) -> Self {
 		Self {
-			refreshed_at: self.refreshed_at,
+			refreshed_at: self.refreshed_at.clone(),
 			series: self.series.clone(),
 			aliases: self.aliases.clone(),
 			started_with: self.started_with.clone(),
@@ -54,37 +55,112 @@ impl Catalogue {
 		catalogue
 	}
 
+	#[cfg(test)]
 	pub fn refreshed(series: Vec<Series>) -> Self {
+		let sources = series
+			.iter()
+			.map(|series| series.source)
+			.collect::<HashSet<_>>();
 		let mut seen = HashSet::new();
 		let series = series
 			.into_iter()
-			.filter(|series| seen.insert(series.id))
+			.filter(|series| seen.insert(series.key()))
 			.collect();
 		let mut catalogue = Self::new(series);
-		catalogue.refreshed_at = now();
+		let refreshed_at = now();
+		catalogue.refreshed_at = sources
+			.into_iter()
+			.map(|source| (source, refreshed_at))
+			.collect();
 		catalogue
 	}
 
-	pub fn is_fresh(&self) -> bool {
-		self.is_fresh_at(now())
+	pub fn refreshed_source(
+		source: ContentSource,
+		series: Vec<Series>,
+	) -> Self {
+		let mut catalogue = Self::new(series);
+		catalogue.refreshed_at.insert(source, now());
+		catalogue
+	}
+
+	pub fn is_fresh_for(&self, sources: &HashSet<ContentSource>) -> bool {
+		self.is_fresh_for_at(sources, now())
+	}
+
+	fn is_fresh_for_at(
+		&self,
+		sources: &HashSet<ContentSource>,
+		now: u64,
+	) -> bool {
+		sources.iter().all(|source| {
+			self.refreshed_at.get(source).is_some_and(|refreshed_at| {
+				now.saturating_sub(*refreshed_at) < MAX_AGE.as_secs()
+			})
+		})
 	}
 
 	pub fn is_empty(&self) -> bool {
 		self.series.is_empty()
 	}
 
+	pub(crate) fn all_series(&self) -> &[Series] {
+		&self.series
+	}
+
+	pub fn retain_sources(&mut self, sources: &HashSet<ContentSource>) {
+		self.refreshed_at
+			.retain(|source, _| sources.contains(source));
+		self.series
+			.retain(|series| sources.contains(&series.source));
+		self.aliases.retain(|_, key| sources.contains(&key.source));
+		self.started_with
+			.retain(|key| sources.contains(&key.source));
+		self.index = None;
+	}
+
+	pub fn remove_source(&mut self, source: ContentSource) {
+		self.refreshed_at.remove(&source);
+		self.series.retain(|series| series.source != source);
+		self.aliases.retain(|_, key| key.source != source);
+		self.started_with.retain(|key| key.source != source);
+		self.index = None;
+	}
+
 	pub fn series(&self, row: usize) -> &Series {
 		&self.series[row]
 	}
 
-	pub fn row_of(&self, series_id: u64) -> Option<usize> {
-		self.series.iter().position(|series| series.id == series_id)
+	pub fn row_of(&self, key: SeriesKey) -> Option<usize> {
+		self.series.iter().position(|series| series.key() == key)
+	}
+
+	pub(crate) fn external_match(
+		&self,
+		my_anime_list_id: Option<u64>,
+		anilist_id: u64,
+		sources: &HashSet<ContentSource>,
+	) -> Option<&Series> {
+		let enabled = |series: &&Series| sources.contains(&series.source);
+		my_anime_list_id
+			.and_then(|id| {
+				self.series
+					.iter()
+					.filter(enabled)
+					.find(|series| series.my_anime_list_id == Some(id))
+			})
+			.or_else(|| {
+				self.series
+					.iter()
+					.filter(enabled)
+					.find(|series| series.anilist_id == Some(anilist_id))
+			})
 	}
 
 	pub fn suggestions<'a>(
 		&'a mut self,
 		query: &str,
-		server_matches: &[u64],
+		server_matches: &[SeriesKey],
 		telemetry: &Recorder,
 	) -> Suggestions<'a> {
 		let preferred = self.preferred_rows(query, server_matches);
@@ -131,59 +207,66 @@ impl Catalogue {
 			.series
 			.iter()
 			.enumerate()
-			.map(|(index, series)| (series.id, index))
+			.map(|(index, series)| (series.key(), index))
 			.collect::<HashMap<_, _>>();
 		for series in incoming {
-			if let Some(index) = positions.get(&series.id).copied() {
+			let key = series.key();
+			if let Some(index) = positions.get(&key).copied() {
 				self.series[index] = series;
 			} else {
-				positions.insert(series.id, self.series.len());
+				positions.insert(key, self.series.len());
 				self.series.push(series);
 			}
 		}
 		self.index = None;
 	}
 
-	pub fn remember_alias(&mut self, query: &str, series_id: u64) {
+	pub fn remember_alias(&mut self, query: &str, key: SeriesKey) {
 		let query = normalize_query(query);
 		if !query.is_empty() {
-			self.aliases.insert(query, series_id);
+			self.aliases.insert(query, key);
 		}
 	}
 
-	pub fn remove_series(&mut self, series_id: u64) {
-		self.series.retain(|series| series.id != series_id);
-		self.aliases.retain(|_, id| *id != series_id);
+	pub fn remove_series(&mut self, key: SeriesKey) {
+		self.series.retain(|series| series.key() != key);
+		self.aliases.retain(|_, alias| *alias != key);
 		self.index = None;
 	}
 
 	pub fn merge_refresh(
 		&mut self,
 		mut refreshed: Self,
-		preserved_series: &HashSet<u64>,
+		preserved_series: &HashSet<SeriesKey>,
 	) {
 		let mut preserved_series = preserved_series.clone();
 		preserved_series.extend(self.aliases.values().copied());
+		let refreshed_sources = refreshed
+			.refreshed_at
+			.keys()
+			.copied()
+			.collect::<HashSet<_>>();
 		let mut ids = refreshed.ids();
 		refreshed.series.extend(
 			self.series
 				.iter()
 				.filter(|series| {
-					preserved_series.contains(&series.id)
-						&& ids.insert(series.id)
+					(!refreshed_sources.contains(&series.source)
+						|| preserved_series.contains(&series.key()))
+						&& ids.insert(series.key())
 				})
 				.cloned(),
 		);
 		refreshed.aliases.clone_from(&self.aliases);
 		refreshed.aliases.retain(|_, id| ids.contains(id));
-		self.refreshed_at = refreshed.refreshed_at;
+		self.refreshed_at.extend(refreshed.refreshed_at);
 		self.series = refreshed.series;
 		self.aliases = refreshed.aliases;
 		self.index = None;
 	}
 
-	pub fn catalogue_use(&self, selected_id: u64) -> CatalogueUse {
-		if self.started_with.contains(&selected_id) {
+	pub fn catalogue_use(&self, selected: SeriesKey) -> CatalogueUse {
+		if self.started_with.contains(&selected) {
 			CatalogueUse::Hit
 		} else {
 			CatalogueUse::Miss
@@ -193,7 +276,7 @@ impl Catalogue {
 	fn preferred_rows(
 		&self,
 		query: &str,
-		server_matches: &[u64],
+		server_matches: &[SeriesKey],
 	) -> Vec<usize> {
 		let mut ids = self
 			.aliases
@@ -222,12 +305,8 @@ impl Catalogue {
 		self.index = Some(Index { rows, search });
 	}
 
-	fn ids(&self) -> HashSet<u64> {
-		self.series.iter().map(|series| series.id).collect()
-	}
-
-	fn is_fresh_at(&self, now: u64) -> bool {
-		now.saturating_sub(self.refreshed_at) < MAX_AGE.as_secs()
+	fn ids(&self) -> HashSet<SeriesKey> {
+		self.series.iter().map(Series::key).collect()
 	}
 }
 
@@ -259,11 +338,11 @@ impl Suggestions<'_> {
 
 impl Catalogue {
 	pub(super) fn from_parts(
-		refreshed_at: u64,
+		refreshed_at: BTreeMap<ContentSource, u64>,
 		series: Vec<Series>,
-		aliases: BTreeMap<String, u64>,
+		aliases: BTreeMap<String, SeriesKey>,
 	) -> Self {
-		let started_with = series.iter().map(|series| series.id).collect();
+		let started_with = series.iter().map(Series::key).collect();
 		Self {
 			refreshed_at,
 			series,
@@ -282,7 +361,11 @@ fn series_rows(series: &[Series]) -> Vec<Row> {
 				item.title.clone(),
 				item.year
 					.map_or_else(|| "?".into(), |year| year.to_string()),
-				item.type_title.as_deref().unwrap_or("Unknown type").into(),
+				format!(
+					"{} · {}",
+					item.source,
+					item.type_title.as_deref().unwrap_or("Unknown type")
+				),
 				format!(
 					"{} episodes",
 					item.number_of_episodes

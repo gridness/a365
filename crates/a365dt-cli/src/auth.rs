@@ -15,9 +15,9 @@ use crate::{error::Error, ui};
 
 const ACCESS_TOKEN_URL: &str =
 	"https://anime365.ru/api/accessToken?app=app-70510a2eebd4c6a4aa6e4a0e";
-const ACCESS_TOKEN_HELP: &str = r#"No Anime365 access token was found and a365dt cannot prompt here.
+const ACCESS_TOKEN_HELP: &str = r#"No Anime365 access token was found and a365 cannot prompt here.
 
-Run a365dt in an interactive terminal, or provide the token through the
+Run a365 in an interactive terminal, or provide the token through the
 ANIME365_ACCESS_TOKEN process environment variable."#;
 #[cfg(target_os = "macos")]
 const KEYCHAIN_ITEM: &str = "anime365-access-token";
@@ -77,11 +77,38 @@ fn browser_access_token() -> Result<AccessToken, Error> {
 
 #[cfg(target_os = "macos")]
 fn keychain_token() -> Option<String> {
+	if let Some(token) = keychain_token_for(KEYCHAIN_ACCOUNT) {
+		return Some(token);
+	}
+	let token = keychain_token_for(app_files::LEGACY_APPLICATION_ID)?;
+	match set_generic_password(
+		KEYCHAIN_ITEM,
+		KEYCHAIN_ACCOUNT,
+		token.as_bytes(),
+	) {
+		Ok(()) => {
+			let _ = delete_generic_password(
+				KEYCHAIN_ITEM,
+				app_files::LEGACY_APPLICATION_ID,
+			);
+			ui::note(
+				"Migrated the Anime365 token to the a365 Keychain account.",
+			);
+		}
+		Err(error) => ui::warning(format!(
+			"Could not migrate the Anime365 token in macOS Keychain: {error}"
+		)),
+	}
+	Some(token)
+}
+
+#[cfg(target_os = "macos")]
+fn keychain_token_for(account: &str) -> Option<String> {
 	let mut search = ItemSearchOptions::new();
 	let result = search
 		.class(ItemClass::generic_password())
 		.service(KEYCHAIN_ITEM)
-		.account(KEYCHAIN_ACCOUNT)
+		.account(account)
 		.load_data(true)
 		.search();
 	match result {
@@ -142,14 +169,19 @@ pub(crate) fn store_if_requested(
 
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_stored_token() -> Result<(), Error> {
-	match delete_generic_password(KEYCHAIN_ITEM, KEYCHAIN_ACCOUNT) {
-		Ok(()) => Ok(()),
-		Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-		Err(error) => Err(Error::with_debug(
-			"Could not remove the Anime365 access token from macOS Keychain.",
-			error,
-		)),
+	for account in [KEYCHAIN_ACCOUNT, app_files::LEGACY_APPLICATION_ID] {
+		match delete_generic_password(KEYCHAIN_ITEM, account) {
+			Ok(()) => {}
+			Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+			Err(error) => {
+				return Err(Error::with_debug(
+					"Could not remove the Anime365 access token from macOS Keychain.",
+					error,
+				));
+			}
+		}
 	}
+	Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -158,17 +190,17 @@ pub(crate) fn remove_stored_token() -> Result<(), Error> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_browser(url: &str) -> bool {
+pub(crate) fn open_browser(url: &str) -> bool {
 	spawn_browser(Command::new("open").arg(url))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn open_browser(url: &str) -> bool {
+pub(crate) fn open_browser(url: &str) -> bool {
 	spawn_browser(Command::new("xdg-open").arg(url))
 }
 
 #[cfg(not(unix))]
-fn open_browser(_url: &str) -> bool {
+pub(crate) fn open_browser(_url: &str) -> bool {
 	false
 }
 

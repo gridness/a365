@@ -104,7 +104,7 @@ pub(crate) fn ensure_migration_idle(
 			) =>
 		{
 			Err(Error::new(
-				"Legacy application state is in use; close other a365dt processes and retry.",
+				"Legacy application state is in use; close other a365 processes and retry.",
 			))
 		}
 		Err(error) => Err(migration_error("inspect", error)),

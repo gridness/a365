@@ -4,12 +4,81 @@ use pretty_assertions::assert_eq;
 
 use super::{ClearRange, CollectionState, Store};
 use crate::{
+	content::ContentSource,
 	download::Status,
 	telemetry::{
 		CatalogueUse, Command, CommandOutcome, InvocationId, Operation, Paths,
-		recording::{DownloadOutcome, Observation, ObservationKind},
+		PlaybackOutcome,
+		recording::{
+			DownloadOutcome, Observation, ObservationKind, SeriesIdentity,
+		},
 	},
 };
+
+#[tokio::test]
+async fn stores_redacted_adult_activity_as_source_agnostic_aggregates() {
+	let paths = paths("redacted-adult");
+	let store = Store::open(paths.clone()).await.unwrap();
+	let invocation_id = InvocationId::new();
+	let mut watermark = None;
+	store
+		.commit(
+			&mut watermark,
+			vec![
+				Observation {
+					invocation_id,
+					observed_at_ms: 1,
+					kind: ObservationKind::SeriesSelection {
+						identity: SeriesIdentity::AggregateOnly,
+						catalogue: None,
+					},
+				},
+				Observation {
+					invocation_id,
+					observed_at_ms: 2,
+					kind: ObservationKind::Playback {
+						identity: SeriesIdentity::AggregateOnly,
+						duration_us: 3,
+						outcome: PlaybackOutcome::NaturalEnd,
+					},
+				},
+			],
+		)
+		.await
+		.unwrap();
+
+	assert_eq!(
+		(
+			sqlx::query_as::<
+				_,
+				(Option<String>, Option<i64>, Option<String>, bool),
+			>(
+				"SELECT series_source, series_id, series_title, \
+				 identity_redacted FROM series_selection_events",
+			)
+			.fetch_one(&store.pool)
+			.await
+			.unwrap(),
+			sqlx::query_as::<
+				_,
+				(Option<String>, Option<i64>, Option<String>, bool, String),
+			>(
+				"SELECT series_source, series_id, series_title, \
+				 identity_redacted, outcome FROM playback_sessions",
+			)
+			.fetch_one(&store.pool)
+			.await
+			.unwrap(),
+		),
+		(
+			(None, None, None, true),
+			(None, None, None, true, "natural_end".into()),
+		)
+	);
+
+	store.close().await;
+	cleanup(&paths);
+}
 
 #[tokio::test]
 async fn opens_the_durable_typed_telemetry_store() {
@@ -39,14 +108,15 @@ async fn opens_the_durable_typed_telemetry_store() {
 				 WHERE name IN (\
 				 'collection_state', 'command_events', \
 				 'series_selection_events', 'download_batches', \
-				 'download_outcomes', 'performance_events'\
+				 'download_outcomes', 'playback_sessions', \
+				 'performance_events'\
 				 ) AND strict = 1",
 			)
 			.fetch_one(&store.pool)
 			.await
 			.unwrap(),
 		),
-		("wal".into(), 2, 1, 5_000, 6)
+		("wal".into(), 2, 1, 5_000, 7)
 	);
 
 	store.close().await;
@@ -76,8 +146,7 @@ async fn stores_complete_typed_observations() {
 					invocation_id,
 					observed_at_ms: 20_000,
 					kind: ObservationKind::SeriesSelection {
-						series_id: 365,
-						series_title: "Private Series title".into(),
+						identity: identity(),
 						catalogue: Some(CatalogueUse::Miss),
 					},
 				},
@@ -85,8 +154,7 @@ async fn stores_complete_typed_observations() {
 					invocation_id,
 					observed_at_ms: 30_000,
 					kind: ObservationKind::DownloadBatch {
-						series_id: 365,
-						series_title: "Private Series title".into(),
+						identity: identity(),
 						duration_us: 12_345,
 						outcomes: vec![
 							DownloadOutcome {
@@ -123,16 +191,21 @@ async fn stores_complete_typed_observations() {
 			.fetch_all(&store.pool)
 			.await
 			.unwrap(),
-			sqlx::query_as::<_, (String, i64, i64, String, Option<String>)>(
-				"SELECT invocation_id, observed_at_ms, series_id, \
-				 series_title, catalogue_result FROM series_selection_events",
+			sqlx::query_as::<
+				_,
+				(String, i64, String, i64, String, bool, Option<String>),
+			>(
+				"SELECT invocation_id, observed_at_ms, series_source, \
+				 series_id, series_title, identity_redacted, catalogue_result \
+				 FROM series_selection_events",
 			)
 			.fetch_all(&store.pool)
 			.await
 			.unwrap(),
-			sqlx::query_as::<_, (String, i64, i64, String, i64)>(
-				"SELECT invocation_id, observed_at_ms, series_id, \
-				 series_title, duration_us FROM download_batches",
+			sqlx::query_as::<_, (String, i64, String, i64, String, bool, i64)>(
+				"SELECT invocation_id, observed_at_ms, series_source, \
+				 series_id, series_title, identity_redacted, duration_us \
+				 FROM download_batches",
 			)
 			.fetch_all(&store.pool)
 			.await
@@ -162,15 +235,19 @@ async fn stores_complete_typed_observations() {
 			vec![(
 				invocation.clone(),
 				20_000,
+				"anime365".into(),
 				365,
 				"Private Series title".into(),
+				false,
 				Some("miss".into()),
 			)],
 			vec![(
 				invocation.clone(),
 				30_000,
+				"anime365".into(),
 				365,
 				"Private Series title".into(),
+				false,
 				12_345,
 			)],
 			vec![("downloaded".into(), Some(42)), ("skipped".into(), None),],
@@ -242,11 +319,15 @@ async fn partial_clear_is_inclusive_cascades_and_advances_its_watermark() {
 		 ('00000000-0000-7000-8000-000000000000', 10, 'download', 'success'),
 		 ('00000000-0000-7000-8000-000000000000', 30, 'download', 'success');
 		 INSERT INTO series_selection_events(
-		  invocation_id, observed_at_ms, series_id, series_title)
-		 SELECT invocation_id, observed_at_ms, 365, 'Series' FROM command_events;
+		  invocation_id, observed_at_ms, series_source, series_id, series_title,
+		  identity_redacted)
+		 SELECT invocation_id, observed_at_ms, 'anime365', 365, 'Series', 0
+		 FROM command_events;
 		 INSERT INTO download_batches(
-		  invocation_id, observed_at_ms, series_id, series_title, duration_us)
-		 SELECT invocation_id, observed_at_ms, 365, 'Series', 1 FROM command_events;
+		  invocation_id, observed_at_ms, series_source, series_id, series_title,
+		  identity_redacted, duration_us)
+		 SELECT invocation_id, observed_at_ms, 'anime365', 365, 'Series', 0, 1
+		 FROM command_events;
 		 INSERT INTO download_outcomes(batch_id, status, downloaded_bytes)
 		 SELECT id, 'downloaded', 1 FROM download_batches;
 		 INSERT INTO performance_events(
@@ -310,8 +391,11 @@ async fn rolls_back_incomplete_download_batches_and_enforces_scalars() {
 					invocation_id,
 					observed_at_ms: 2,
 					kind: ObservationKind::DownloadBatch {
-						series_id: 365,
-						series_title: "Series".into(),
+						identity: SeriesIdentity::Included {
+							source: ContentSource::Anime365,
+							id: 365,
+							title: "Series".into(),
+						},
 						duration_us: 3,
 						outcomes: vec![DownloadOutcome {
 							status: Status::Downloaded,
@@ -345,8 +429,10 @@ async fn rolls_back_incomplete_download_batches_and_enforces_scalars() {
 			.unwrap(),
 			sqlx::query(
 				"INSERT INTO series_selection_events \
-				 (invocation_id, observed_at_ms, series_id, series_title) \
-				 VALUES ('00000000-0000-7000-8000-000000000000', 0, 0, 'x')",
+				 (invocation_id, observed_at_ms, series_source, series_id, \
+				 series_title, identity_redacted) VALUES \
+				 ('00000000-0000-7000-8000-000000000000', 0, \
+				 'anime365', 0, 'x', 0)",
 			)
 			.execute(&store.pool)
 			.await
@@ -380,7 +466,7 @@ async fn stored_event_times(store: &Store) -> (Vec<(String, i64)>, i64) {
 
 fn paths(name: &str) -> Paths {
 	let root = std::env::temp_dir().join(format!(
-		"a365dt-telemetry-storage-{name}-{}-{}",
+		"a365-telemetry-storage-{name}-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)
@@ -391,6 +477,14 @@ fn paths(name: &str) -> Paths {
 		data: root.join("data/telemetry.sqlite"),
 		disabled: root.join("config/telemetry-disabled"),
 		lock: root.join("data/telemetry.lock"),
+	}
+}
+
+fn identity() -> SeriesIdentity {
+	SeriesIdentity::Included {
+		source: ContentSource::Anime365,
+		id: 365,
+		title: "Private Series title".into(),
 	}
 }
 

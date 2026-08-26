@@ -182,6 +182,7 @@ async fn validate_schema(
 		 refreshed_at, next_discovery_order, \
 		 (SELECT COUNT(*) FROM series), \
 		 (SELECT COUNT(*) FROM aliases), \
+		 (SELECT COUNT(*) FROM catalogue_source_state), \
 		 (SELECT COUNT(*) FROM release) \
 		 FROM catalogue_state WHERE singleton = 1",
 	)
@@ -243,7 +244,7 @@ fn open_failure(
 ) -> OpenFailure {
 	OpenFailure {
 		error: Error::with_debug(
-			"Could not open the local cache; run `a365dt cache prune` to inspect or reset it.",
+			"Could not open the local cache; run `a365 cache prune` to inspect or reset it.",
 			format!("{}: {error}", path.display()),
 		),
 		rebuildable: sqlite::is_structural(&error, context),
@@ -253,7 +254,7 @@ fn open_failure(
 fn schema_failure(path: &Path, detail: impl std::fmt::Display) -> OpenFailure {
 	OpenFailure {
 		error: Error::with_debug(
-			"Could not open the local cache; run `a365dt cache prune` to inspect or reset it.",
+			"Could not open the local cache; run `a365 cache prune` to inspect or reset it.",
 			format!("{}: {detail}", path.display()),
 		),
 		rebuildable: true,
@@ -262,7 +263,7 @@ fn schema_failure(path: &Path, detail: impl std::fmt::Display) -> OpenFailure {
 
 fn read_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not read the local cache; run `a365dt cache prune` to reset it.",
+		"Could not read the local cache; run `a365 cache prune` to reset it.",
 		error,
 	)
 }

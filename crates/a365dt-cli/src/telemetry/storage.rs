@@ -22,6 +22,7 @@ pub(super) use clearing::ClearRange;
 
 const INITIALIZATION_LOCK: &str = "telemetry-initialization.lock";
 pub(super) static MIGRATOR: Migrator = sqlx::migrate!("./migrations/telemetry");
+type IdentityFields = (Option<&'static str>, Option<i64>, Option<String>, bool);
 
 #[derive(Clone)]
 pub(super) struct Store {
@@ -246,39 +247,47 @@ async fn insert(
 			.map_err(write_error)?;
 		}
 		ObservationKind::SeriesSelection {
-			series_id,
-			series_title,
+			identity,
 			catalogue,
 		} => {
+			let (source, series_id, series_title, identity_redacted) =
+				identity_fields(identity)?;
 			sqlx::query(
 				"INSERT INTO series_selection_events \
-				 (invocation_id, observed_at_ms, series_id, series_title, \
-				 catalogue_result) VALUES (?, ?, ?, ?, ?)",
+				 (invocation_id, observed_at_ms, series_source, series_id, \
+				 series_title, identity_redacted, catalogue_result) \
+				 VALUES (?, ?, ?, ?, ?, ?, ?)",
 			)
 			.bind(invocation_id)
 			.bind(observed_at_ms)
-			.bind(i64_from(series_id, "Series ID")?)
+			.bind(source)
+			.bind(series_id)
 			.bind(series_title)
+			.bind(identity_redacted)
 			.bind(catalogue.and_then(|usage| usage.database_name()))
 			.execute(&mut **transaction)
 			.await
 			.map_err(write_error)?;
 		}
 		ObservationKind::DownloadBatch {
-			series_id,
-			series_title,
+			identity,
 			duration_us,
 			outcomes,
 		} => {
+			let (source, series_id, series_title, identity_redacted) =
+				identity_fields(identity)?;
 			let batch_id = sqlx::query(
 				"INSERT INTO download_batches \
-				 (invocation_id, observed_at_ms, series_id, series_title, \
-				 duration_us) VALUES (?, ?, ?, ?, ?)",
+				 (invocation_id, observed_at_ms, series_source, series_id, \
+				 series_title, identity_redacted, duration_us) \
+				 VALUES (?, ?, ?, ?, ?, ?, ?)",
 			)
 			.bind(invocation_id)
 			.bind(observed_at_ms)
-			.bind(i64_from(series_id, "Series ID")?)
+			.bind(source)
+			.bind(series_id)
 			.bind(series_title)
+			.bind(identity_redacted)
 			.bind(i64_from(duration_us, "Download duration")?)
 			.execute(&mut **transaction)
 			.await
@@ -287,6 +296,31 @@ async fn insert(
 			for outcome in outcomes {
 				insert_download_outcome(transaction, batch_id, outcome).await?;
 			}
+		}
+		ObservationKind::Playback {
+			identity,
+			duration_us,
+			outcome,
+		} => {
+			let (source, series_id, series_title, identity_redacted) =
+				identity_fields(identity)?;
+			sqlx::query(
+				"INSERT INTO playback_sessions \
+				 (invocation_id, observed_at_ms, series_source, series_id, \
+				 series_title, identity_redacted, duration_us, outcome) \
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			)
+			.bind(invocation_id)
+			.bind(observed_at_ms)
+			.bind(source)
+			.bind(series_id)
+			.bind(series_title)
+			.bind(identity_redacted)
+			.bind(i64_from(duration_us, "Playback duration")?)
+			.bind(outcome.name())
+			.execute(&mut **transaction)
+			.await
+			.map_err(write_error)?;
 		}
 		ObservationKind::Performance {
 			operation,
@@ -313,6 +347,24 @@ async fn insert(
 		}
 	}
 	Ok(())
+}
+
+fn identity_fields(
+	identity: super::recording::SeriesIdentity,
+) -> Result<IdentityFields, Error> {
+	match identity {
+		super::recording::SeriesIdentity::AggregateOnly => {
+			Ok((None, None, None, true))
+		}
+		super::recording::SeriesIdentity::Included { source, id, title } => {
+			Ok((
+				Some(source.as_str()),
+				Some(i64_from(id, "Series ID")?),
+				Some(title),
+				false,
+			))
+		}
+	}
 }
 
 async fn insert_download_outcome(
@@ -449,21 +501,21 @@ fn migration_error(error: MigrationError) -> Error {
 
 fn open_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not open the local telemetry. Run `a365dt doctor --debug` to inspect its database.",
+		"Could not open the local telemetry. Run `a365 doctor --debug` to inspect its database.",
 		error,
 	)
 }
 
 pub(super) fn read_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not read the local telemetry. Run `a365dt doctor --debug` to inspect its database.",
+		"Could not read the local telemetry. Run `a365 doctor --debug` to inspect its database.",
 		error,
 	)
 }
 
 fn write_error(error: impl std::fmt::Display) -> Error {
 	Error::with_debug(
-		"Could not update the local telemetry. Close other a365dt processes and retry.",
+		"Could not update the local telemetry. Close other a365 processes and retry.",
 		error,
 	)
 }

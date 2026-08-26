@@ -5,17 +5,19 @@ use pretty_assertions::assert_eq;
 use tokio::sync::watch;
 
 use super::{
-	Args, CacheCommand, Commands, ConfigCommand, TelemetryCommand,
+	Args, CacheCommand, Commands, ConfigCommand, MediaAction, TelemetryCommand,
 	cancel_download,
 	command_line::{OwnerRoute, owner_route, route_title_query},
+	media_action,
 };
+use crate::interactive::{self, Anime365Access};
 
 #[test]
 fn parses_configuration_commands() {
-	let interactive = Args::try_parse_from(["a365dt", "config"]).unwrap();
-	let show = Args::try_parse_from(["a365dt", "config", "show"]).unwrap();
+	let interactive = Args::try_parse_from(["a365", "config"]).unwrap();
+	let show = Args::try_parse_from(["a365", "config", "show"]).unwrap();
 	let reset =
-		Args::try_parse_from(["a365dt", "config", "reset", "--yes"]).unwrap();
+		Args::try_parse_from(["a365", "config", "reset", "--yes"]).unwrap();
 
 	assert!(matches!(
 		interactive.command,
@@ -52,7 +54,7 @@ fn routes_interrupts_to_active_downloads() {
 #[test]
 fn forces_multi_word_command_names_through_title_search() {
 	let args =
-		Args::try_parse_from(["a365dt", "--query", "cache", "prune"]).unwrap();
+		Args::try_parse_from(["a365", "--query", "cache", "prune"]).unwrap();
 
 	assert_eq!(
 		(args.forced_query, args.query, args.command.is_none(),),
@@ -67,16 +69,27 @@ fn forces_multi_word_command_names_through_title_search() {
 #[test]
 fn parses_mux_after_query_and_its_aliases() {
 	for option in ["--mux", "--burn-subtitles", "--as-single-file"] {
-		let args = Args::try_parse_from(["a365dt", "Frieren", option]).unwrap();
+		let args =
+			Args::try_parse_from(["a365", "Frieren", "--download", option])
+				.unwrap();
 
-		assert_eq!((args.query, args.mux), (vec!["Frieren".to_owned()], true));
+		assert_eq!(
+			(args.query, args.download, args.mux),
+			(vec!["Frieren".to_owned()], true, true)
+		);
 	}
 }
 
 #[test]
 fn parses_explicit_download_preference_overrides() {
 	let args = Args::try_parse_from([
-		"a365dt", "--output", "Videos", "--jobs", "8", "Frieren",
+		"a365",
+		"--download",
+		"--output",
+		"Videos",
+		"--jobs",
+		"8",
+		"Frieren",
 	])
 	.unwrap();
 
@@ -90,9 +103,92 @@ fn parses_explicit_download_preference_overrides() {
 }
 
 #[test]
+fn routes_default_and_stream_actions_to_playback() {
+	let default = Args::try_parse_from(["a365", "Frieren"]).unwrap();
+	let stream = Args::try_parse_from(["a365", "stream", "Frieren"]).unwrap();
+	let download =
+		Args::try_parse_from(["a365", "Frieren", "--download"]).unwrap();
+
+	assert_eq!(media_action(&default), Ok(MediaAction::Playback));
+	assert_eq!(media_action(&stream), Ok(MediaAction::Playback));
+	assert_eq!(media_action(&download), Ok(MediaAction::Download));
+	assert!(matches!(
+		stream.command,
+		Some(Commands::Stream { query }) if query == ["Frieren"]
+	));
+}
+
+#[test]
+fn defers_anime365_access_for_anilist_and_timetable_destinations() {
+	let anilist_login =
+		Args::try_parse_from(["a365", "anilist", "login"]).unwrap();
+	let anilist_list =
+		Args::try_parse_from(["a365", "anilist", "list"]).unwrap();
+	let timetable = Args::try_parse_from(["a365", "timetable"]).unwrap();
+	let search = Args::try_parse_from(["a365", "Frieren"]).unwrap();
+
+	assert_eq!(
+		[
+			interactive::anime365_access(&anilist_login),
+			interactive::anime365_access(&anilist_list),
+			interactive::anime365_access(&timetable),
+			interactive::anime365_access(&search),
+		],
+		[
+			Anime365Access::Deferred,
+			Anime365Access::Deferred,
+			Anime365Access::Deferred,
+			Anime365Access::Required,
+		]
+	);
+}
+
+#[test]
+fn routes_explicit_interactive_commands_to_their_tui_destinations() {
+	for (arguments, expected) in [
+		(&["a365"][..], crate::tui::Destination::Home),
+		(&["a365", "Frieren"][..], crate::tui::Destination::Search),
+		(
+			&["a365", "stream", "Frieren"][..],
+			crate::tui::Destination::Search,
+		),
+		(
+			&["a365", "timetable"][..],
+			crate::tui::Destination::Timetable,
+		),
+		(&["a365", "moments"][..], crate::tui::Destination::Moments),
+		(&["a365", "profile"][..], crate::tui::Destination::Profile),
+		(
+			&["a365", "anilist", "list"][..],
+			crate::tui::Destination::AniList,
+		),
+	] {
+		let args = Args::try_parse_from(arguments.iter().copied()).unwrap();
+		let query = match &args.command {
+			Some(Commands::Stream { query }) => query.join(" "),
+			_ => args.query.join(" "),
+		};
+
+		assert_eq!(interactive::destination(&args, &query), expected);
+	}
+}
+
+#[test]
+fn rejects_download_only_options_during_playback() {
+	for arguments in [
+		&["a365", "Frieren", "--output", "Videos"][..],
+		&["a365", "Frieren", "--jobs", "8"][..],
+		&["a365", "Frieren", "--mux"][..],
+		&["a365", "--download", "stream", "Frieren"][..],
+	] {
+		let args = Args::try_parse_from(arguments.iter().copied()).unwrap();
+		assert!(media_action(&args).is_err());
+	}
+}
+
+#[test]
 fn parses_telemetry_control_commands() {
-	let args =
-		Args::try_parse_from(["a365dt", "telemetry", "disable"]).unwrap();
+	let args = Args::try_parse_from(["a365", "telemetry", "disable"]).unwrap();
 
 	assert!(matches!(
 		args.command,
@@ -129,7 +225,7 @@ fn rejects_conflicting_or_oversized_telemetry_clear_options() {
 		&["--since", "30", "minutes", "ago"][..],
 		&["--since", "30m", "--since", "1h"][..],
 	] {
-		let arguments = ["a365dt", "telemetry", "clear"]
+		let arguments = ["a365", "telemetry", "clear"]
 			.into_iter()
 			.chain(arguments.iter().copied());
 		assert!(Args::try_parse_from(arguments).is_err());
@@ -137,7 +233,7 @@ fn rejects_conflicting_or_oversized_telemetry_clear_options() {
 }
 
 fn clear_args(arguments: &[&str]) -> (bool, Option<Vec<String>>) {
-	let arguments = ["a365dt", "telemetry", "clear"]
+	let arguments = ["a365", "telemetry", "clear"]
 		.into_iter()
 		.chain(arguments.iter().copied());
 	let args = Args::try_parse_from(arguments).unwrap();
@@ -154,9 +250,9 @@ fn clear_args(arguments: &[&str]) -> (bool, Option<Vec<String>>) {
 #[test]
 fn parses_purge_confirmation_options() {
 	for (arguments, expected) in [
-		(&["a365dt", "purge"][..], false),
-		(&["a365dt", "purge", "-y"][..], true),
-		(&["a365dt", "purge", "--yes"][..], true),
+		(&["a365", "purge"][..], false),
+		(&["a365", "purge", "-y"][..], true),
+		(&["a365", "purge", "--yes"][..], true),
 	] {
 		let args = Args::try_parse_from(arguments.iter().copied()).unwrap();
 
@@ -170,17 +266,17 @@ fn parses_purge_confirmation_options() {
 #[test]
 fn routes_unknown_command_arguments_through_title_search() {
 	for arguments in [
-		&["a365dt", "cache", "this"][..],
-		&["a365dt", "cache", "prune", "this"][..],
-		&["a365dt", "completions", "this"][..],
-		&["a365dt", "completions", "zsh", "this"][..],
-		&["a365dt", "config", "this"][..],
-		&["a365dt", "config", "show", "this"][..],
-		&["a365dt", "doctor", "elise"][..],
-		&["a365dt", "stats", "this"][..],
-		&["a365dt", "telemetry", "this"][..],
-		&["a365dt", "telemetry", "show", "this"][..],
-		&["a365dt", "update", "this"][..],
+		&["a365", "cache", "this"][..],
+		&["a365", "cache", "prune", "this"][..],
+		&["a365", "completions", "this"][..],
+		&["a365", "completions", "zsh", "this"][..],
+		&["a365", "config", "this"][..],
+		&["a365", "config", "show", "this"][..],
+		&["a365", "doctor", "elise"][..],
+		&["a365", "stats", "this"][..],
+		&["a365", "telemetry", "this"][..],
+		&["a365", "telemetry", "show", "this"][..],
+		&["a365", "update", "this"][..],
 	] {
 		let mut args = Args::try_parse_from(arguments.iter().copied()).unwrap();
 
@@ -198,9 +294,9 @@ fn routes_unknown_command_arguments_through_title_search() {
 
 #[test]
 fn preserves_existing_commands() {
-	let mut cache = Args::try_parse_from(["a365dt", "cache", "prune"]).unwrap();
+	let mut cache = Args::try_parse_from(["a365", "cache", "prune"]).unwrap();
 	let mut clear = Args::try_parse_from([
-		"a365dt",
+		"a365",
 		"telemetry",
 		"clear",
 		"--since",
@@ -208,10 +304,10 @@ fn preserves_existing_commands() {
 	])
 	.unwrap();
 	let mut completions =
-		Args::try_parse_from(["a365dt", "completions", "zsh"]).unwrap();
-	let mut doctor = Args::try_parse_from(["a365dt", "doctor"]).unwrap();
-	let mut stats = Args::try_parse_from(["a365dt", "stats"]).unwrap();
-	let mut update = Args::try_parse_from(["a365dt", "update"]).unwrap();
+		Args::try_parse_from(["a365", "completions", "zsh"]).unwrap();
+	let mut doctor = Args::try_parse_from(["a365", "doctor"]).unwrap();
+	let mut stats = Args::try_parse_from(["a365", "stats"]).unwrap();
+	let mut update = Args::try_parse_from(["a365", "update"]).unwrap();
 
 	route_title_query(&mut cache);
 	route_title_query(&mut clear);
@@ -255,7 +351,7 @@ fn preserves_existing_commands() {
 #[test]
 fn accepts_preauthorized_cache_rebuilds() {
 	let args =
-		Args::try_parse_from(["a365dt", "cache", "prune", "--yes"]).unwrap();
+		Args::try_parse_from(["a365", "cache", "prune", "--yes"]).unwrap();
 
 	assert!(matches!(
 		args.command,
@@ -271,25 +367,38 @@ fn accepts_preauthorized_cache_rebuilds() {
 #[test]
 fn routes_commands_to_only_their_required_owners() {
 	for (arguments, expected) in [
-		(&["a365dt", "purge", "--yes"][..], OwnerRoute::Purge),
+		(&["a365", "purge", "--yes"][..], OwnerRoute::Purge),
 		(
-			&["a365dt", "telemetry", "show"][..],
+			&["a365", "telemetry", "show"][..],
 			OwnerRoute::TelemetryControl,
 		),
-		(&["a365dt", "completions", "zsh"][..], OwnerRoute::Stateless),
-		(&["a365dt", "config"][..], OwnerRoute::PreferencesOnly),
+		(&["a365", "completions", "zsh"][..], OwnerRoute::Stateless),
+		(&["a365", "config"][..], OwnerRoute::PreferencesOnly),
+		(&["a365", "config", "show"][..], OwnerRoute::PreferencesOnly),
 		(
-			&["a365dt", "config", "show"][..],
-			OwnerRoute::PreferencesOnly,
-		),
-		(
-			&["a365dt", "cache", "prune", "--yes"][..],
+			&["a365", "cache", "prune", "--yes"][..],
 			OwnerRoute::CachePruneAndTelemetry,
 		),
-		(&["a365dt", "doctor"][..], OwnerRoute::CacheAndTelemetry),
-		(&["a365dt", "stats"][..], OwnerRoute::CacheAndTelemetry),
-		(&["a365dt", "update"][..], OwnerRoute::CacheAndTelemetry),
-		(&["a365dt", "Frieren"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "doctor"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "anilist", "status"][..], OwnerRoute::AccountOnly),
+		(
+			&["a365", "anilist", "login"][..],
+			OwnerRoute::CacheAndTelemetry,
+		),
+		(
+			&["a365", "anilist", "list"][..],
+			OwnerRoute::CacheAndTelemetry,
+		),
+		(&["a365", "moments"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "profile"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "timetable"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "stats"][..], OwnerRoute::CacheAndTelemetry),
+		(
+			&["a365", "stream", "Frieren"][..],
+			OwnerRoute::CacheAndTelemetry,
+		),
+		(&["a365", "update"][..], OwnerRoute::CacheAndTelemetry),
+		(&["a365", "Frieren"][..], OwnerRoute::CacheAndTelemetry),
 	] {
 		let mut args = Args::try_parse_from(arguments.iter().copied()).unwrap();
 		route_title_query(&mut args);

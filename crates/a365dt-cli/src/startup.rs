@@ -19,7 +19,7 @@ use crate::{
 
 const TIPS: &str = include_str!("../tips.txt");
 const LATEST_RELEASE_URL: &str =
-	"https://api.github.com/repos/Gridness/a365dt/releases/latest";
+	"https://api.github.com/repos/Gridness/a365/releases/latest";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECK_FAILURE: &str = "Could not check for updates.";
 
@@ -89,7 +89,7 @@ async fn fetch_update() -> Result<(CompletedRelease, Option<Update>), Error> {
 
 async fn fetch_release() -> Result<Release, Error> {
 	let client = reqwest::Client::builder()
-		.user_agent(concat!("a365dt/", env!("CARGO_PKG_VERSION")))
+		.user_agent(concat!("a365/", env!("CARGO_PKG_VERSION")))
 		.timeout(REQUEST_TIMEOUT)
 		.build()
 		.map_err(check_error)?;
@@ -175,15 +175,15 @@ fn upgrade_instruction(
 ) -> String {
 	match channel {
 		InstallationChannel::Homebrew => {
-			"brew upgrade Gridness/oosama/a365dt".to_owned()
+			"brew upgrade Gridness/oosama/a365".to_owned()
 		}
 		InstallationChannel::Cargo => concat!(
-			"cargo install --git https://github.com/Gridness/a365dt ",
-			"--bin a365dt"
+			"cargo install --git https://github.com/Gridness/a365 ",
+			"--bin a365"
 		)
 		.to_owned(),
 		InstallationChannel::Manual => {
-			format!("Download {release_url} and replace a365dt.")
+			format!("Download {release_url} and replace a365.")
 		}
 	}
 }
@@ -204,7 +204,7 @@ fn installation_channel_from_path(
 		.unwrap_or_else(|_| executable.into());
 	if executable
 		.ancestors()
-		.any(|ancestor| ancestor.ends_with("Cellar/a365dt"))
+		.any(|ancestor| ancestor.ends_with("Cellar/a365"))
 	{
 		return InstallationChannel::Homebrew;
 	}

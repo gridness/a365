@@ -1,0 +1,5 @@
+# Make the TUI the interactive application
+
+a365 uses a full-screen, keyboard-and-mouse TUI with Home, Search, Timetable, Moments, AniList, and Profile destinations. Home prioritizes personalized broadcasts, recent Moments, and Series search; the other destinations provide interactive Series discovery, read-only remote-library browsing, Episode and Translation selection, and Playback or download handoff. Explicit interactive commands may open a corresponding destination directly.
+
+Configuration, diagnostics, telemetry, purge, completions, and other automation-oriented operations remain explicit line-oriented commands, and non-TTY callers must supply an explicit command rather than falling back to an interactive line wizard. Anime365 community surfaces without a documented API are isolated behind a best-effort adapter: their failure disables only the affected enrichment, reports a distinct health error, and never prevents ordinary Anime365 Playback or AniList use. This keeps the interactive state model cohesive while preserving predictable automation and failure boundaries.

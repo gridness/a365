@@ -7,9 +7,10 @@ use pretty_assertions::assert_eq;
 use tokio::sync::{mpsc, oneshot};
 
 use super::{receive_batch, remember_failure};
+use crate::content::ContentSource;
 use crate::telemetry::{
 	Command, CommandOutcome, InvocationId, Paths,
-	recording::{Observation, ObservationKind},
+	recording::{Observation, ObservationKind, SeriesIdentity},
 	snapshot,
 	storage::Store,
 };
@@ -77,8 +78,11 @@ async fn remembers_the_first_failure_and_keeps_committing() {
 					invocation_id,
 					observed_at_ms: 1,
 					kind: ObservationKind::SeriesSelection {
-						series_id: 0,
-						series_title: "invalid".into(),
+						identity: SeriesIdentity::Included {
+							source: ContentSource::Anime365,
+							id: 0,
+							title: "invalid".into(),
+						},
 						catalogue: None,
 					},
 				}],
@@ -109,7 +113,7 @@ async fn remembers_the_first_failure_and_keeps_committing() {
 			snapshot::capture(&store).await.unwrap().counters,
 		),
 		(
-			"Could not update the local telemetry. Close other a365dt processes and retry."
+			"Could not update the local telemetry. Close other a365 processes and retry."
 				.into(),
 			std::collections::BTreeMap::from([(
 				"commands.update.success".into(),
@@ -138,7 +142,7 @@ fn command_observation(
 
 fn paths() -> Paths {
 	let root = std::env::temp_dir().join(format!(
-		"a365dt-telemetry-writer-error-{}-{}",
+		"a365-telemetry-writer-error-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)

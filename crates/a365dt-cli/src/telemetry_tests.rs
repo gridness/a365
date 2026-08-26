@@ -10,15 +10,19 @@ use uuid::{Uuid, Version};
 
 use super::{
 	CatalogueUse, Command, CommandOutcome, InvocationId, MigrationPreparation,
-	Operation, Paths, Recorder, TelemetryRecovery, Writer,
+	Operation, Paths, PlaybackOutcome, Recorder, SeriesRecording,
+	TelemetryRecovery, Writer,
 	display::format_timestamp,
 	ensure_migration_idle, prepare_migration_at,
-	recording::{DownloadOutcome, Observation, ObservationKind},
+	recording::{
+		DownloadOutcome, Observation, ObservationKind, SeriesIdentity,
+	},
 	recreate_migration_at, snapshot,
 	storage::Store,
 };
 use crate::{
 	api::{Episode, Series},
+	content::ContentSource,
 	download::{Outcome, Status, Summary},
 	error::Error,
 };
@@ -29,9 +33,11 @@ fn recorder_sends_complete_typed_privacy_safe_observations_from_clones() {
 	let (observations, mut receiver) = mpsc::unbounded_channel();
 	let recorder = Recorder::connected(invocation_id, observations);
 	recorder.record_command(Command::Download, CommandOutcome::Success);
-	recorder
-		.clone()
-		.record_series(&series(), CatalogueUse::Miss);
+	recorder.clone().record_series(
+		&series(),
+		CatalogueUse::Miss,
+		SeriesRecording::IncludeIdentity,
+	);
 	recorder.record_download(
 		&series(),
 		&Summary {
@@ -51,6 +57,7 @@ fn recorder_sends_complete_typed_privacy_safe_observations_from_clones() {
 			],
 			elapsed: Duration::from_micros(12_345),
 		},
+		SeriesRecording::IncludeIdentity,
 	);
 	drop(recorder.measure_items(Operation::SearchRank, 30_000));
 	drop(recorder);
@@ -74,13 +81,11 @@ fn recorder_sends_complete_typed_privacy_safe_observations_from_clones() {
 				outcome: CommandOutcome::Success,
 			},
 			ObservationKind::SeriesSelection {
-				series_id: 365,
-				series_title: "Private Series title".into(),
+				identity: identity(),
 				catalogue: Some(CatalogueUse::Miss),
 			},
 			ObservationKind::DownloadBatch {
-				series_id: 365,
-				series_title: "Private Series title".into(),
+				identity: identity(),
 				duration_us: 12_345,
 				outcomes: vec![
 					DownloadOutcome {
@@ -108,6 +113,53 @@ fn recorder_sends_complete_typed_privacy_safe_observations_from_clones() {
 		(parsed.get_version(), invocation_id.to_string().len()),
 		(Some(Version::SortRand), 36)
 	);
+}
+
+#[test]
+fn aggregate_only_adult_observations_exclude_source_id_and_title() {
+	let invocation_id = InvocationId::new();
+	let (observations, mut receiver) = mpsc::unbounded_channel();
+	let recorder = Recorder::connected(invocation_id, observations);
+	let mut adult = series();
+	adult.source = ContentSource::H365;
+	adult.episodes[0].source = ContentSource::H365;
+	recorder.record_series(
+		&adult,
+		CatalogueUse::Bypassed,
+		SeriesRecording::AggregateOnly,
+	);
+	recorder.record_playback(
+		&adult,
+		Duration::from_secs(1),
+		PlaybackOutcome::NaturalEnd,
+		SeriesRecording::AggregateOnly,
+	);
+	drop(recorder);
+
+	assert_eq!(
+		std::iter::from_fn(|| receiver.try_recv().ok())
+			.map(|observation| observation.kind)
+			.collect::<Vec<_>>(),
+		vec![
+			ObservationKind::SeriesSelection {
+				identity: SeriesIdentity::AggregateOnly,
+				catalogue: None,
+			},
+			ObservationKind::Playback {
+				identity: SeriesIdentity::AggregateOnly,
+				duration_us: 1_000_000,
+				outcome: PlaybackOutcome::NaturalEnd,
+			},
+		]
+	);
+}
+
+fn identity() -> SeriesIdentity {
+	SeriesIdentity::Included {
+		source: ContentSource::Anime365,
+		id: 365,
+		title: "Private Series title".into(),
+	}
 }
 
 #[tokio::test]
@@ -415,7 +467,7 @@ fn command_observation(
 
 fn paths(name: &str) -> Paths {
 	let root = std::env::temp_dir().join(format!(
-		"a365dt-telemetry-{name}-{}-{}",
+		"a365-telemetry-{name}-{}-{}",
 		std::process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)
@@ -435,13 +487,17 @@ fn cleanup(paths: &Paths) {
 
 fn series() -> Series {
 	Series {
+		source: crate::content::ContentSource::Anime365,
 		id: 365,
 		title: "Private Series title".into(),
 		year: Some(2024),
 		type_title: Some("TV".into()),
 		number_of_episodes: Some(12),
+		my_anime_list_id: None,
+		anilist_id: None,
 		poster_url_small: Some("secret poster".into()),
 		episodes: vec![Episode {
+			source: crate::content::ContentSource::Anime365,
 			id: 1,
 			episode_int: "secret number".into(),
 			episode_full: "secret episode".into(),

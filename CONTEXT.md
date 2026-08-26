@@ -1,43 +1,59 @@
-# a365dt
+# a365
 
-a365dt downloads user-selected Anime365 releases while keeping episode and translation choices explicit.
+a365 discovers user-selected Anime365 and H365 releases while keeping episode, translation, Playback, and download choices explicit.
 
 ## Language
 
 **Application home**:
-The build-specific, user-scoped directory that owns a365dt's Download preferences, local cache, and telemetry state: `~/.a365dt` for release builds and `~/.a365dt-dev` for development builds. Download preferences live in `config.toml`, cache files under `cache/`, and telemetry files under `data/`; downloaded media and OS-managed credentials are outside it.
+The build-specific, user-scoped directory that owns a365's preferences, local cache, and telemetry state: `~/.a365` for release builds and `~/.a365-dev` for development builds. Preferences live in `config.toml`, cache files under `cache/`, and telemetry files under `data/`; downloaded media and OS-managed credentials are outside it.
 _Avoid_: OS application directory, data directory
 
 **Download preferences**:
-User-defined defaults for the output directory, concurrent download count, and whether to mux subtitles without confirmation. Any omitted preference inherits its built-in default; `a365dt config` edits all effective values interactively, `config show` displays them, and `config reset` restores built-in defaults. They are stored in the Application home's `config.toml`; explicit Invocation choices take precedence when present, and disabling automatic muxing preserves the existing prompt.
+User-defined defaults for the output directory, concurrent download count, and whether to mux subtitles without confirmation. Any omitted preference inherits its built-in default; `a365 config` edits all effective values interactively, `config show` displays them, and `config reset` restores built-in defaults. They are stored in the Application home's `config.toml`; explicit Invocation choices take precedence when present, and disabling automatic muxing preserves the existing prompt.
 _Avoid_: Settings, options
 
 **Interactive session**:
-An a365dt run in which a person searches for a Series and makes download choices. Help, version reporting, shell-completion generation, and maintenance commands are not Interactive sessions.
+An a365 run in which a person discovers a Series and makes Playback or download choices. Help, version reporting, shell-completion generation, and maintenance commands are not Interactive sessions.
 _Avoid_: Launch, invocation
 
 **Invocation**:
-One execution of a365dt, including Interactive sessions and non-interactive or maintenance commands. Telemetry events from the same Invocation share an Invocation ID.
+One execution of a365, including Interactive sessions and non-interactive or maintenance commands. Telemetry events from the same Invocation share an Invocation ID.
 _Avoid_: Session, launch
 
 **Tip**:
-A short, single-line piece of a365dt guidance shown at the beginning of an Interactive session. Its source text is Markdown.
+A short, single-line piece of a365 guidance shown at the beginning of an Interactive session. Its source text is Markdown.
 _Avoid_: Hint, startup message
 
 **Available update**:
-A published stable a365dt release whose version is semantically higher than the running version.
+A published stable a365 release whose version is semantically higher than the running version.
 _Avoid_: Latest version, new version
 
 **Telemetry event**:
-An immutable, timestamped local observation of a365dt usage or performance. It may identify a selected Series by title and Anime365 Series ID, but never records search text, remote candidates, URLs, tokens, or file paths.
+An immutable, timestamped local observation of a365 usage or performance. It may identify a selected Series by title and Content source identity when its privacy preferences permit that, but never records search text, remote candidates, URLs, tokens, or file paths.
 _Avoid_: Counter, metric snapshot
 
 **Installation channel**:
-The distribution route through which the running a365dt executable was installed: Homebrew, Cargo, or manual when no managed route can be identified.
+The distribution route through which the running a365 executable was installed: Homebrew, Cargo, or manual when no managed route can be identified.
 _Avoid_: Installation type, package manager
 
+**Content source**:
+A remote catalogue boundary that owns Series identities, metadata, Translations, and media access rules.
+_Avoid_: Provider, website
+
+**H365**:
+The adult Content source hosted by Hentai365 and available only after explicit user opt-in.
+_Avoid_: Adult mode, hidden catalogue
+
+**Adult availability preference**:
+User consent controlling whether a365 may expose adult Series across H365, the AniList library, the Timetable, and Moments. When consent is absent, content whose adult status cannot be established is also unavailable.
+_Avoid_: H365 toggle, adult mode
+
+**Adult telemetry preference**:
+User consent controlling whether local Telemetry events may identify selected adult Series. Without consent, adult-content usage is represented only by source-agnostic counts and outcomes.
+_Avoid_: Adult telemetry, privacy mode
+
 **Series**:
-An Anime365 title that contains episodes.
+A title from one Content source that contains Episodes.
 _Avoid_: Anime
 
 **Series suggestion**:
@@ -45,19 +61,39 @@ A Series proposed as a likely match while the user searches by title.
 _Avoid_: Search guess, search result
 
 **Series search alias**:
-Anime365-recognized shorthand or an alternative name for a Series that need not appear in its displayed title.
+Content-source-recognized shorthand or an alternative name for a Series that need not appear in its displayed title.
 _Avoid_: Acronym, abbreviation
 
 **Series catalogue**:
-The collection of Series available for discovery on Anime365.
+The collection of Series available for discovery from one or more enabled Content sources.
 _Avoid_: Title index, title database
 
 **Catalogue hit**:
 A Series selection that reuses a Series already present in the persisted Series catalogue when the search starts. Direct URLs, cancelled searches, and failed searches are neither hits nor misses.
 _Avoid_: Cache hit, API cache hit
 
+**Timetable**:
+A current-week, user-timezone view of scheduled anime broadcasts, optionally ordered using the user's AniList connection.
+_Avoid_: Calendar, schedule
+
+**AniList connection**:
+Browser implicit OAuth authorization that lets a365 read the user's AniList library and personalize Timetable ordering. A pending login owns the fixed loopback callback and a one-time local relay nonce; the validated token lives in the operating-system credential store rather than the Application home.
+_Avoid_: AniList account, AniList profile
+
+**AniList library**:
+The user's read-only collection of standard and custom AniList anime lists, including each entry's status, progress, score, priority, and airing information.
+_Avoid_: Watch history, AniList profile
+
+**Anime365 profile**:
+The user's Anime365 identity and subscription state, optionally accompanied by publicly visible anime-list progress, scores, and Moments.
+_Avoid_: Watch history, account settings
+
+**Moment**:
+A short, user-created Anime365 video excerpt associated with an Episode and Series. a365 browses categorized, paginated Moment metadata and plays its highest official rendition without participating in creation or social discussion.
+_Avoid_: Clip, Episode, Translation
+
 **Episode**:
-A selectable installment of a Series, identified by its Anime365 episode ID and displayed episode label.
+A selectable installment of a Series, identified within its Content source and displayed by its episode label.
 _Avoid_: File, video
 
 **Episode range**:
@@ -65,7 +101,7 @@ One or more inclusive numeric intervals requested from a Series. Overlapping int
 _Avoid_: Download batch
 
 **Translation**:
-One Anime365 media release for exactly one Episode, characterized by its kind, language, and authors. A RAW release is also a Translation in Anime365 terminology.
+One Content source media release for exactly one Episode, characterized by its kind, language, and authors. A RAW release is also a Translation.
 _Avoid_: Translation track
 
 **Translation authors**:
@@ -73,7 +109,7 @@ The people or group credited for a Translation.
 _Avoid_: Translation title
 
 **Subtitle asset**:
-A separate styled subtitle file exposed by Anime365 for a subtitle Translation. Its absence means the Translation's subtitles are contained in the video.
+A separate styled subtitle file exposed by a Content source for a subtitle Translation. Its absence means the Translation's subtitles are contained in the video.
 _Avoid_: Translation, caption
 
 **Translation track**:
@@ -87,6 +123,18 @@ _Avoid_: Automatic quality, silent fallback
 **Download batch**:
 The selected Episodes from one Series, paired with one Translation track and one Resolution plan.
 _Avoid_: Queue, playlist
+
+**Playback**:
+Playing selected Episode or Moment media in an external Player without keeping a completed media file in the output directory.
+_Avoid_: Stream, preview
+
+**Automatic continuation preference**:
+User consent allowing Playback to move from an Episode that ended naturally to the next whole-number Episode of the same Series when the selected Translation track and resolution remain available. It never continues after a manual stop, Player closure, interruption, playback error, fractional Episode, or Moment.
+_Avoid_: Playlist, unconditional autoplay
+
+**Player**:
+The external application that receives selected Episode media and any separate Subtitle asset for Playback.
+_Avoid_: Video backend, viewer
 
 **Verified download**:
 Downloaded Episode media that passed its transfer completion checks and was finalized successfully.

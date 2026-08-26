@@ -11,6 +11,11 @@ mod migration;
 pub(crate) use migration::prepare_for_command;
 
 pub(crate) const APPLICATION_ID: &str = if cfg!(debug_assertions) {
+	"a365-dev"
+} else {
+	"a365"
+};
+pub(crate) const LEGACY_APPLICATION_ID: &str = if cfg!(debug_assertions) {
 	"a365dt-dev"
 } else {
 	"a365dt"
@@ -51,6 +56,7 @@ struct LockedMigration {
 
 #[derive(Clone, Copy)]
 enum LegacyFileDisposition {
+	Root,
 	Cache,
 	Data,
 	Discard,
@@ -59,6 +65,7 @@ enum LegacyFileDisposition {
 impl LegacyFileDisposition {
 	fn destination(self, paths: &Paths) -> Option<&Path> {
 		match self {
+			Self::Root => Some(&paths.root),
 			Self::Cache => Some(&paths.cache),
 			Self::Data => Some(&paths.data),
 			Self::Discard => None,
@@ -170,7 +177,7 @@ fn lock_legacy_files(paths: &[PathBuf]) -> io::Result<Vec<File>> {
 		file.try_lock().map_err(|error| match error {
 			fs::TryLockError::WouldBlock => io::Error::new(
 				io::ErrorKind::WouldBlock,
-				"Legacy application state is in use; close other a365dt processes and retry.",
+				"Legacy application state is in use; close other a365 or a365dt processes and retry.",
 			),
 			fs::TryLockError::Error(error) => error,
 		})?;
@@ -227,7 +234,11 @@ fn prepare_at(
 	if files.is_empty() {
 		create_paths(&paths)?;
 		Ok(Preparation::Ready)
-	} else if paths_have_state(&paths)? {
+	} else if paths_have_state(&paths)?
+		|| (files.iter().any(|(_, disposition)| {
+			matches!(disposition, LegacyFileDisposition::Root)
+		}) && paths.root.join("config.toml").try_exists()?)
+	{
 		let legacy = files[0].0.parent().unwrap_or(&files[0].0);
 		Err(io::Error::new(
 			io::ErrorKind::AlreadyExists,
@@ -281,7 +292,9 @@ fn collect_application_files(
 		};
 		match disposition {
 			LegacyFileDisposition::Discard => lock_files.push(path),
-			LegacyFileDisposition::Cache | LegacyFileDisposition::Data => {
+			LegacyFileDisposition::Root
+			| LegacyFileDisposition::Cache
+			| LegacyFileDisposition::Data => {
 				files.push((path, disposition));
 			}
 		}
@@ -344,6 +357,7 @@ fn paths_have_state(paths: &Paths) -> io::Result<bool> {
 
 fn application_file_disposition(path: &Path) -> Option<LegacyFileDisposition> {
 	match path.file_name()?.to_str()? {
+		"config.toml" => Some(LegacyFileDisposition::Root),
 		"cache.sqlite"
 		| "cache.sqlite-wal"
 		| "cache.sqlite-shm"
@@ -377,9 +391,7 @@ fn prepare() -> io::Result<Option<Preparation>> {
 	let Some(paths) = paths() else {
 		return Ok(None);
 	};
-	let legacy_roots = legacy_directories()
-		.map(|directories| application_roots(&directories))
-		.unwrap_or_default();
+	let legacy_roots = legacy_roots(&paths);
 	let migration_lock = migration::MigrationLock::acquire(&paths)?;
 	let mut recovery_roots = legacy_roots.clone();
 	recovery_roots.push(paths.root.clone());
@@ -418,9 +430,7 @@ pub(crate) fn purge() -> io::Result<()> {
 		.as_ref()
 		.map(migration::MigrationLock::acquire)
 		.transpose()?;
-	let mut roots = legacy_directories()
-		.map(|directories| application_roots(&directories))
-		.unwrap_or_default();
+	let mut roots = paths.as_ref().map_or_else(Vec::new, legacy_roots);
 	let tombstones = roots
 		.iter()
 		.map(|root| migration::tombstone_path(root))
@@ -436,8 +446,20 @@ pub(crate) fn purge() -> io::Result<()> {
 	purge_directories(&roots)
 }
 
-fn legacy_directories() -> Option<ProjectDirs> {
-	ProjectDirs::from("", "", APPLICATION_ID)
+fn legacy_roots(paths: &Paths) -> Vec<PathBuf> {
+	let mut roots = Vec::new();
+	if let Some(base) = BaseDirs::new() {
+		roots.push(base.home_dir().join(format!(".{LEGACY_APPLICATION_ID}")));
+	}
+	for application_id in [APPLICATION_ID, LEGACY_APPLICATION_ID] {
+		if let Some(directories) = ProjectDirs::from("", "", application_id) {
+			roots.extend(application_roots(&directories));
+		}
+	}
+	roots.retain(|root| root != &paths.root);
+	roots.sort_unstable();
+	roots.dedup();
+	roots
 }
 
 fn application_roots(directories: &ProjectDirs) -> Vec<PathBuf> {

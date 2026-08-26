@@ -12,17 +12,21 @@ pub enum OwnerRoute {
 	Purge,
 	Stateless,
 	PreferencesOnly,
+	AccountOnly,
 	TelemetryControl,
 	CachePruneAndTelemetry,
 	CacheAndTelemetry,
 }
 
 pub fn owner_route(args: &Args) -> OwnerRoute {
-	match args.command {
+	match &args.command {
 		Some(Commands::Purge { .. }) => OwnerRoute::Purge,
 		Some(Commands::Telemetry { .. }) => OwnerRoute::TelemetryControl,
 		Some(Commands::Completions { .. }) => OwnerRoute::Stateless,
 		Some(Commands::Config { .. }) => OwnerRoute::PreferencesOnly,
+		Some(Commands::Anilist { command }) if !command.opens_tui() => {
+			OwnerRoute::AccountOnly
+		}
 		Some(Commands::Cache {
 			command: CacheCommand::Prune { .. },
 		}) => OwnerRoute::CachePruneAndTelemetry,
@@ -30,7 +34,12 @@ pub fn owner_route(args: &Args) -> OwnerRoute {
 			command: CacheCommand::Query(_),
 		})
 		| Some(Commands::Doctor { .. })
+		| Some(Commands::Anilist { .. })
+		| Some(Commands::Moments)
+		| Some(Commands::Profile)
 		| Some(Commands::Stats { .. })
+		| Some(Commands::Stream { .. })
+		| Some(Commands::Timetable)
 		| Some(Commands::Update { .. })
 		| None => OwnerRoute::CacheAndTelemetry,
 	}
@@ -73,7 +82,7 @@ pub fn suggestion_message(suggestions: &[String]) -> String {
 	let mut message =
 		"Unknown command or subcommand.\nPerhaps you meant:".to_owned();
 	for suggestion in suggestions {
-		message.push_str("\n  a365dt ");
+		message.push_str("\n  a365 ");
 		message.push_str(suggestion);
 	}
 	message

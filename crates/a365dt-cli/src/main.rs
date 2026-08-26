@@ -1,20 +1,28 @@
+mod anilist;
 mod api;
 mod app_files;
 mod auth;
 mod cache;
 mod command_line;
+mod community;
+mod content;
 mod doctor;
 mod download;
+mod episode_playback;
 mod error;
+mod interactive;
+mod playback;
 mod poster;
 mod preferences;
 mod search;
 mod select;
 mod series_search;
+mod session;
 mod sqlite;
 mod startup;
 mod stats;
 mod telemetry;
+mod tui;
 mod ui;
 
 #[cfg(test)]
@@ -37,12 +45,13 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::aot::{Shell, generate};
 use console::style;
 use indicatif::{HumanBytes, HumanDuration};
-use tokio::{fs, process::Command, signal, sync::watch, task::JoinSet};
+use tokio::{process::Command, signal, sync::watch, task::JoinSet};
 
 use crate::{
 	api::{Anime365, Episode, Translation},
 	command_line::OwnerRoute,
-	download::{Job, Status},
+	content::ContentSource,
+	download::Status,
 	error::Error,
 	preferences::ConfigCommand,
 	select::Release,
@@ -50,9 +59,9 @@ use crate::{
 
 #[derive(Parser)]
 #[command(
-	name = "a365dt",
+	name = "a365",
 	version,
-	about = "Download Anime365 episodes without guessing translations"
+	about = "Find, play, and download Anime365 and H365 episodes"
 )]
 struct Args {
 	#[command(subcommand)]
@@ -78,6 +87,10 @@ struct Args {
 	#[arg(short, long)]
 	jobs: Option<NonZeroUsize>,
 
+	/// Download selected Episodes instead of playing them.
+	#[arg(long)]
+	download: bool,
+
 	/// Mux separate ASS subtitles into MKV without confirmation.
 	#[arg(
 		long,
@@ -92,6 +105,12 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
+	/// Connect and inspect a read-only AniList account.
+	Anilist {
+		#[command(subcommand)]
+		command: anilist::Command,
+	},
+
 	/// Manage the local cache.
 	Cache {
 		#[command(subcommand)]
@@ -104,28 +123,40 @@ enum Commands {
 		arguments: Vec<String>,
 	},
 
-	/// Configure persistent Download preferences.
+	/// Configure persistent preferences.
 	Config {
 		#[command(subcommand)]
 		command: Option<ConfigCommand>,
 	},
 
-	/// Check a365dt, Anime365, preferences, cache, and telemetry health.
+	/// Check a365, Anime365, preferences, cache, and telemetry health.
 	Doctor {
 		#[arg(value_name = "QUERY", num_args = 0.., hide = true)]
 		query: Vec<String>,
 	},
 
-	/// Permanently remove all local a365dt application data.
+	/// Permanently remove all local a365 application data.
 	Purge {
 		/// Purge without asking for confirmation.
 		#[arg(short, long)]
 		yes: bool,
 	},
 
+	/// Browse and play public Anime365 Moments.
+	Moments,
+
+	/// Show the connected Anime365 profile and public lists.
+	Profile,
+
 	/// Show local cache, usage, and performance statistics.
 	Stats {
 		#[arg(value_name = "QUERY", num_args = 0.., hide = true)]
+		query: Vec<String>,
+	},
+
+	/// Explicitly open the default Playback flow.
+	Stream {
+		#[arg(value_name = "QUERY_OR_URL", num_args = 0..)]
 		query: Vec<String>,
 	},
 
@@ -135,7 +166,10 @@ enum Commands {
 		command: TelemetryCommand,
 	},
 
-	/// Check whether a newer stable a365dt release is available.
+	/// Show the current local week from AniList's airing schedule.
+	Timetable,
+
+	/// Check whether a newer stable a365 release is available.
 	Update {
 		#[arg(value_name = "QUERY", num_args = 0.., hide = true)]
 		query: Vec<String>,
@@ -208,6 +242,12 @@ enum TelemetryCommand {
 	Query(Vec<String>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MediaAction {
+	Download,
+	Playback,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
 	let mut args = Args::parse();
@@ -227,7 +267,7 @@ async fn main() -> ExitCode {
 	}
 	command_line::route_title_query(&mut args);
 	if let Some(Commands::Update { .. }) = args.command.as_ref() {
-		println!("a365dt {}\n", env!("CARGO_PKG_VERSION"));
+		println!("a365 {}\n", env!("CARGO_PKG_VERSION"));
 	}
 	let owner_route = command_line::owner_route(&args);
 	if owner_route == OwnerRoute::Purge {
@@ -239,7 +279,7 @@ async fn main() -> ExitCode {
 		} else {
 			match ui::confirm(
 				&ui::red(
-					"Permanently remove all local a365dt application data and saved credentials?",
+					"Permanently remove all local a365 application data and saved credentials?",
 				),
 				false,
 			) {
@@ -256,14 +296,15 @@ async fn main() -> ExitCode {
 		}
 		let files = app_files::purge().map_err(|error| {
 			Error::with_debug(
-				"Could not remove all local a365dt application files.",
+				"Could not remove all local a365 application files.",
 				error,
 			)
 		});
-		let token = auth::remove_stored_token();
-		return match files.and(token) {
+		let anime365_token = auth::remove_stored_token();
+		let anilist_token = anilist::remove_stored_token();
+		return match files.and(anime365_token).and(anilist_token) {
 			Ok(()) => {
-				ui::success("Local a365dt application data removed");
+				ui::success("Local a365 application data removed");
 				ExitCode::SUCCESS
 			}
 			Err(error) => {
@@ -281,7 +322,7 @@ async fn main() -> ExitCode {
 			completion_shell(arguments)
 				.expect("invalid completion shells return to title search"),
 			&mut Args::command(),
-			"a365dt",
+			"a365",
 			&mut std::io::stdout(),
 		);
 		return ExitCode::SUCCESS;
@@ -294,9 +335,9 @@ async fn main() -> ExitCode {
 		let Some(Commands::Config { command }) = args.command.as_ref() else {
 			unreachable!("the preferences route contains a config command")
 		};
-		let result =
-			preferences::Store::discover().and_then(|store| match command {
-				None => store.configure(),
+		let result = match preferences::Store::discover() {
+			Ok(store) => match command {
+				None => store.configure().await,
 				Some(ConfigCommand::Show { .. }) => store.show(),
 				Some(ConfigCommand::Reset { yes, .. }) => {
 					store.reset_command(if *yes {
@@ -308,7 +349,22 @@ async fn main() -> ExitCode {
 				Some(ConfigCommand::Query(_)) => {
 					unreachable!("config queries return to title search")
 				}
-			});
+			},
+			Err(error) => Err(error),
+		};
+		return match result {
+			Ok(()) => ExitCode::SUCCESS,
+			Err(error) => {
+				ui::failure(error.render(debug));
+				ExitCode::FAILURE
+			}
+		};
+	}
+	if owner_route == OwnerRoute::AccountOnly {
+		let result = match args.command.as_ref() {
+			Some(Commands::Anilist { command }) => anilist::run(command).await,
+			_ => unreachable!("the account route contains an account command"),
+		};
 		return match result {
 			Ok(()) => ExitCode::SUCCESS,
 			Err(error) => {
@@ -394,7 +450,7 @@ async fn main() -> ExitCode {
 					ExitCode::SUCCESS
 				})
 			} else {
-				run(args, active_download, &store, &telemetry).await
+				session::run(args, active_download, &store, &telemetry).await
 			};
 			store.close().await;
 			result
@@ -402,6 +458,7 @@ async fn main() -> ExitCode {
 		OwnerRoute::Purge
 		| OwnerRoute::Stateless
 		| OwnerRoute::PreferencesOnly
+		| OwnerRoute::AccountOnly
 		| OwnerRoute::TelemetryControl => {
 			unreachable!("early-return routes do not open ordinary owners")
 		}
@@ -474,7 +531,7 @@ async fn run_telemetry(
 }
 
 fn telemetry_command(args: &Args) -> telemetry::Command {
-	match args.command {
+	match &args.command {
 		Some(Commands::Cache {
 			command: CacheCommand::Prune { .. },
 		}) => telemetry::Command::CachePrune,
@@ -488,15 +545,24 @@ fn telemetry_command(args: &Args) -> telemetry::Command {
 			unreachable!("configuration commands return before telemetry")
 		}
 		Some(Commands::Doctor { .. }) => telemetry::Command::Doctor,
+		Some(Commands::Anilist { command }) if !command.opens_tui() => {
+			unreachable!("account commands return before recording")
+		}
+		Some(Commands::Anilist { .. })
+		| Some(Commands::Moments)
+		| Some(Commands::Profile)
+		| Some(Commands::Timetable) => telemetry::Command::Playback,
 		Some(Commands::Purge { .. }) => {
 			unreachable!("purge returns before recording")
 		}
 		Some(Commands::Stats { .. }) => telemetry::Command::Stats,
+		Some(Commands::Stream { .. }) => telemetry::Command::Playback,
 		Some(Commands::Telemetry { .. }) => {
 			unreachable!("telemetry commands return before recording")
 		}
 		Some(Commands::Update { .. }) => telemetry::Command::Update,
-		None => telemetry::Command::Download,
+		None if args.download => telemetry::Command::Download,
+		None => telemetry::Command::Playback,
 	}
 }
 
@@ -510,131 +576,44 @@ fn cancel_download(
 		.is_some_and(|cancel| cancel.send(true).is_ok())
 }
 
+fn media_action(args: &Args) -> Result<MediaAction, Error> {
+	if matches!(args.command, Some(Commands::Stream { .. })) && args.download {
+		return Err("`stream` and `--download` cannot be combined.".into());
+	}
+	let action = if args.download {
+		MediaAction::Download
+	} else {
+		MediaAction::Playback
+	};
+	if action == MediaAction::Playback
+		&& (args.output.is_some() || args.jobs.is_some() || args.mux)
+	{
+		return Err(
+			"`--output`, `--jobs`, and `--mux` are download-only; add `--download`."
+				.into(),
+		);
+	}
+	Ok(action)
+}
+
 async fn prune_cache(
 	permission: cache::RebuildPermission,
 ) -> Result<ExitCode, Error> {
-	ui::heading("a365dt  ◆  Anime365 downloader");
+	ui::heading("a365  ◆  Anime365 player and downloader");
 	cache::prune(permission).await?;
 	ui::success("Local cache cleared");
 	Ok(ExitCode::SUCCESS)
 }
 
-async fn run(
-	args: Args,
-	active_download: Arc<Mutex<Option<watch::Sender<bool>>>>,
-	store: &cache::Store,
-	telemetry: &telemetry::Recorder,
-) -> Result<ExitCode, Error> {
-	ui::heading("a365dt  ◆  Anime365 downloader");
-	let preference_store = preferences::Store::discover()?;
-	let preferences = preference_store.load(preferences::Overrides {
-		output: args.output.clone(),
-		jobs: args.jobs,
-		mux: args.mux,
-	})?;
-	preferences::warn_if_high_concurrency(&preferences);
-	startup::show(store).await;
-	let access_token = auth::access_token()?;
-	let api =
-		Anime365::new(access_token.value().to_owned(), telemetry.clone())?;
-	ui::note("Validating Anime365 access…");
-	api.validate().await?;
-	ui::success("Authenticated");
-	auth::store_if_requested(&access_token)?;
-
-	let query = if args.forced_query.is_empty() {
-		args.query.join(" ")
+fn series_recording(
+	series: &api::Series,
+	preferences: &preferences::Preferences,
+) -> telemetry::SeriesRecording {
+	if series.source == ContentSource::H365 && !preferences.adult_telemetry {
+		telemetry::SeriesRecording::AggregateOnly
 	} else {
-		args.forced_query.join(" ")
-	};
-	let selected = series_search::choose(&api, store, query, telemetry).await?;
-	telemetry.record_series(&selected.series, selected.catalogue);
-	let series = selected.series;
-	ui::success(format!("Selected {}", series.title));
-	poster::show(&api, &series).await;
-	let episodes = select::choose_episodes(&series.episodes)?;
-	let translations = api.translations(series.id).await?;
-	let (track, releases) = select::choose_track(translations, &episodes)?;
-	ui::success(format!(
-		"Selected {}-{} by {}",
-		track.kind, track.language, track.authors
-	));
-
-	ui::note("Loading available media…");
-	let releases = fetch_embeds(&api, releases, preferences.jobs.get()).await?;
-	let planned = select::choose_resolutions(releases)?;
-	let separate_subtitles = planned
-		.iter()
-		.filter(|release| release.subtitle_url.is_some())
-		.count();
-	let embedded = planned.len() - separate_subtitles;
-	if track.kind == "sub" && embedded > 0 {
-		ui::note(format!(
-			"{embedded} episode(s) have subtitles contained in the MP4."
-		));
+		telemetry::SeriesRecording::IncludeIdentity
 	}
-	let mux = if separate_subtitles > 0 && ffmpeg_available().await {
-		preferences.mux
-			|| ui::confirm(
-				"Mux separate ASS subtitles into MKV after download?",
-				false,
-			)?
-	} else {
-		if separate_subtitles > 0 {
-			ui::warning(
-				"ffmpeg is unavailable; keeping MP4 and ASS files separate.",
-			);
-		}
-		false
-	};
-
-	let output = preference_store.prepare_output(&preferences.output)?;
-	let directory = output.join(download::sanitize(&series.title, 100));
-	fs::create_dir_all(&directory).await.map_err(|error| {
-		Error::with_debug(
-			format!(
-				"Could not create output directory {}.",
-				directory.display()
-			),
-			error,
-		)
-	})?;
-	ui::note(format!("Output: {}", directory.display()));
-	let jobs = planned
-		.into_iter()
-		.map(|release| Job::new(release, directory.clone(), mux))
-		.collect();
-	let (cancel, cancellation) = watch::channel(false);
-	*active_download.lock().unwrap() = Some(cancel);
-	let summary = download::run(
-		api,
-		jobs,
-		preferences.jobs.get(),
-		args.debug,
-		cancellation,
-	)
-	.await;
-	*active_download.lock().unwrap() = None;
-	telemetry.record_download(&series, &summary);
-	print_summary(&summary, &directory, args.debug);
-	ui::alert();
-	let interrupted = summary
-		.outcomes
-		.iter()
-		.any(|outcome| outcome.status == Status::Interrupted);
-	let failed = summary.outcomes.iter().any(|outcome| {
-		matches!(
-			outcome.status,
-			Status::Failed | Status::MuxFailed | Status::Interrupted
-		)
-	});
-	Ok(if interrupted {
-		ExitCode::from(130)
-	} else if failed {
-		ExitCode::FAILURE
-	} else {
-		ExitCode::SUCCESS
-	})
 }
 
 async fn fetch_embeds(

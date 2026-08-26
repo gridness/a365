@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::{
 	api::Series,
+	content::ContentSource,
 	download::{self, Status},
 };
 
@@ -22,6 +23,7 @@ pub enum Command {
 	CachePrune,
 	Doctor,
 	Download,
+	Playback,
 	Stats,
 	TelemetryDisable,
 	TelemetryEnable,
@@ -41,6 +43,20 @@ pub enum CatalogueUse {
 	Bypassed,
 	Hit,
 	Miss,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeriesRecording {
+	AggregateOnly,
+	IncludeIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlaybackOutcome {
+	Failure,
+	Interrupted,
+	NaturalEnd,
+	Stopped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,20 +106,33 @@ pub(super) enum ObservationKind {
 		outcome: CommandOutcome,
 	},
 	SeriesSelection {
-		series_id: u64,
-		series_title: String,
+		identity: SeriesIdentity,
 		catalogue: Option<CatalogueUse>,
 	},
 	DownloadBatch {
-		series_id: u64,
-		series_title: String,
+		identity: SeriesIdentity,
 		duration_us: u64,
 		outcomes: Vec<DownloadOutcome>,
+	},
+	Playback {
+		identity: SeriesIdentity,
+		duration_us: u64,
+		outcome: PlaybackOutcome,
 	},
 	Performance {
 		operation: Operation,
 		duration_us: u64,
 		work_units: Option<u64>,
+	},
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum SeriesIdentity {
+	AggregateOnly,
+	Included {
+		source: ContentSource,
+		id: u64,
+		title: String,
 	},
 }
 
@@ -145,11 +174,23 @@ impl Command {
 			Self::CachePrune => "cache_prune",
 			Self::Doctor => "doctor",
 			Self::Download => "download",
+			Self::Playback => "playback",
 			Self::Stats => "stats",
 			Self::TelemetryDisable => "telemetry_disable",
 			Self::TelemetryEnable => "telemetry_enable",
 			Self::TelemetryShow => "telemetry_show",
 			Self::Update => "update",
+		}
+	}
+}
+
+impl PlaybackOutcome {
+	pub(super) const fn name(self) -> &'static str {
+		match self {
+			Self::Failure => "failure",
+			Self::Interrupted => "interrupted",
+			Self::NaturalEnd => "natural_end",
+			Self::Stopped => "stopped",
 		}
 	}
 }
@@ -209,10 +250,14 @@ impl Recorder {
 		self.record(ObservationKind::Command { command, outcome });
 	}
 
-	pub fn record_series(&self, series: &Series, catalogue: CatalogueUse) {
+	pub fn record_series(
+		&self,
+		series: &Series,
+		catalogue: CatalogueUse,
+		recording: SeriesRecording,
+	) {
 		self.record(ObservationKind::SeriesSelection {
-			series_id: series.id,
-			series_title: series.title.clone(),
+			identity: series_identity(series, recording),
 			catalogue: match catalogue {
 				CatalogueUse::Bypassed => None,
 				CatalogueUse::Hit | CatalogueUse::Miss => Some(catalogue),
@@ -224,10 +269,10 @@ impl Recorder {
 		&self,
 		series: &Series,
 		summary: &download::Summary,
+		recording: SeriesRecording,
 	) {
 		self.record(ObservationKind::DownloadBatch {
-			series_id: series.id,
-			series_title: series.title.clone(),
+			identity: series_identity(series, recording),
 			duration_us: u64::try_from(summary.elapsed.as_micros())
 				.unwrap_or(u64::MAX),
 			outcomes: summary
@@ -239,6 +284,21 @@ impl Recorder {
 						.then_some(outcome.bytes),
 				})
 				.collect(),
+		});
+	}
+
+	pub fn record_playback(
+		&self,
+		series: &Series,
+		duration: Duration,
+		outcome: PlaybackOutcome,
+		recording: SeriesRecording,
+	) {
+		self.record(ObservationKind::Playback {
+			identity: series_identity(series, recording),
+			duration_us: u64::try_from(duration.as_micros())
+				.unwrap_or(u64::MAX),
+			outcome,
 		});
 	}
 
@@ -292,6 +352,20 @@ impl Recorder {
 			observed_at_ms: now_ms(),
 			kind,
 		});
+	}
+}
+
+fn series_identity(
+	series: &Series,
+	recording: SeriesRecording,
+) -> SeriesIdentity {
+	match recording {
+		SeriesRecording::AggregateOnly => SeriesIdentity::AggregateOnly,
+		SeriesRecording::IncludeIdentity => SeriesIdentity::Included {
+			source: series.source,
+			id: series.id,
+			title: series.title.clone(),
+		},
 	}
 }
 
