@@ -175,6 +175,8 @@ jobs:
 
       - name: Read version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "release=false" >> "$GITHUB_OUTPUT"
           current="$(jq -r '.["."] // empty' .release-please-manifest.json)"
@@ -182,7 +184,7 @@ jobs:
           if git rev-parse HEAD^ >/dev/null 2>&1; then
             previous="$(git show HEAD^:.release-please-manifest.json 2>/dev/null | jq -r '.["."] // empty' || true)"
           fi
-          if [[ -z "$current" || "$current" == "$previous" ]]; then
+          if [[ -z "$current" ]]; then
             exit 0
           fi
           cargo_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "a365dt-cli") | .version')"
@@ -190,6 +192,10 @@ jobs:
           if ! [[ "$current" == "$cargo_version" && "$current" == "$file_version" ]]; then
             echo "Release Please ($current), Cargo ($cargo_version), and version.txt ($file_version) differ" >&2
             exit 1
+          fi
+          if [[ "$current" == "$previous" ]] &&
+            [[ "$(gh release view "v$current" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'select(.isDraft == false) | .isDraft' 2>/dev/null || true)" == false ]]; then
+            exit 0
           fi
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
@@ -294,6 +300,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          permission-issues: write
 
       - name: Check for existing release
         id: existing
