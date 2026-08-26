@@ -1,6 +1,7 @@
 # a365 v3.0 progress
 
-This log tracks the staged implementation of milestone 3.0. Public cutover was approved on 2026-08-26 and is in progress.
+This log tracks the staged implementation of milestone 3.0. Public cutover was
+approved and completed on 2026-08-26.
 
 ## Review stages
 
@@ -17,24 +18,25 @@ earlier stages.
 - Complete: record ADRs 0008 through 0011.
 - Complete: add acceptance criteria to issues #103 and #105 through #110.
 - Complete: create milestone issues #111 (AniList account and library) and #112 (Anime365 profile and Moments).
-- Complete locally: replace the release PAT with short-lived GitHub App tokens (#108).
+- Complete and released: replace the release PAT with short-lived GitHub App
+  tokens (#108).
 
 ## Implementation checkpoints
 
-- Complete locally: resumable guided AniList/GitHub App setup wizard.
-- Complete locally: source-qualified Anime365/H365 catalogues, migrations,
+- Complete and released: resumable guided AniList/GitHub App setup wizard.
+- Complete and released: source-qualified Anime365/H365 catalogues, migrations,
   independent failure boundaries, and adult/privacy preferences (#106, #107).
-- Complete locally: playback-first IINA/mpv flow, credential-free loopback
+- Complete and released: playback-first IINA/mpv flow, credential-free loopback
   proxy, native ASS, and opt-in natural-EOF continuation (#103).
-- Complete locally: AniList browser OAuth, secure credential storage,
+- Complete and released: AniList browser OAuth, secure credential storage,
   read-only standard/custom lists, and personalized local-week Timetable
   (#110, #111).
-- Complete locally: isolated documented Anime365 profile and public
+- Complete and released: isolated documented Anime365 profile and public
   profile/Moments adapters, fail-closed adult filtering, and public Moment
   playback (#112).
-- Complete locally: keyboard-and-mouse Home/Search/Timetable/Moments/AniList/
+- Complete and released: keyboard-and-mouse Home/Search/Timetable/Moments/AniList/
   Profile TUI with independent loading and error states (#105).
-- Complete locally: public-facing a365 executable/repository/formula/artifact/
+- Complete and released: public-facing a365 executable/repository/formula/artifact/
   docs/update rename, automatic state and credential migration, and the v3
   `a365dt` compatibility executable (#109).
 - Complete locally: clean development build; primary/compatibility executable
@@ -67,8 +69,39 @@ earlier stages.
   category, pagination, and `data-sources` rendition contracts through the
   parser-aware `doctor` probe. Media playback accepts only documented public
   page and CDN hosts.
-- Approved and in progress: remote repository/formula rename, implementation
-  merge, v3.0 publication, installation verification, and issue closure.
+- Complete live: remote repository/formula rename, implementation merge, v3.0
+  publication, installation verification, and issue closure.
+
+## Public cutover outcomes
+
+- Merged the reviewed implementation as
+  [#115](https://github.com/gridness/a365/pull/115), then renamed the source
+  repository to `Gridness/a365`. GitHub redirects the old repository URL; the
+  GitHub App installation, public variables, private-key secret, and protected
+  `main` ruleset survived the rename.
+- Merged the Release Please proposal as
+  [#116](https://github.com/gridness/a365/pull/116) and published the non-draft
+  [v3.0.0 release](https://github.com/gridness/a365/releases/tag/v3.0.0). Its
+  three platform archives contain `a365`, the v3 compatibility `a365dt`
+  executable, and `LICENSE`.
+- The first publication attempt created the v3.0.0 draft but could not comment
+  on the release PR with its App token. The permanent recovery in
+  [#117](https://github.com/gridness/a365/pull/117) grants that job issue-write
+  permission and retries an unfinished current-version draft. Codecov also
+  synchronized the renamed repository before the recovered checks passed.
+- The successful
+  [release run](https://github.com/gridness/a365/actions/runs/32976679482)
+  rebuilt and tested all targets, matched all published SHA-256 checksums,
+  attested all three archives, and published the existing draft. Independent
+  verification repeated the checksum, attestation, archive-content, version,
+  and shell-completion checks against the public assets.
+- The same run generated and installed the public
+  [`a365` formula](https://github.com/gridness/homebrew-oosama/blob/main/Formula/a365.rb),
+  exercised both installed executables, removed `Formula/a365dt.rb`, and pushed
+  tap commit
+  [`cfe6fa2`](https://github.com/gridness/homebrew-oosama/commit/cfe6fa2f30bffed9e056f6b1a118b9a565309465).
+- Closed #103 and #105 through #112 as completed after both publication gates
+  passed, leaving no open issues and closing the 3.0 milestone.
 
 ## Acceptance evidence
 
@@ -79,7 +112,7 @@ earlier stages.
 | #106 | Source-qualified API/cache/telemetry models and migrations, H365 catalogue/Series/Episode/Translation/embed/failure fixtures, ID-collision tests, per-source freshness, stale-row hiding, and visible source-failure isolation in the TUI. |
 | #107 | Complete preference round trips, opt-in success/denial/transient decisions, runtime H365 isolation, fail-closed AniList/Timetable/Moment filters, and adult telemetry redaction. |
 | #108 | Four independently minted, single-repository least-privilege job tokens plus the completed reversible source-PR and cross-repository tap-push dry run; the built-in token is read-only and no release PAT remains. |
-| #109 | Primary and compatibility binaries, machine-output suppression, old/new/conflict/interrupted/repeated migration cases, renamed package/workflow/formula surfaces, and a still-closed public cutover gate. |
+| #109 | Primary and compatibility binaries, machine-output suppression, old/new/conflict/interrupted/repeated migration cases, renamed package/workflow/formula surfaces, and the verified public cutover. |
 | #110 | Fixed-timezone and DST boundaries, exact-week query bounds, authenticated/public GraphQL fixtures, every personalization group, adult filtering, MAL/AniList mapping, in-session TUI caching, and lazy Anime365 access only after a content selection. |
 | #111 | Live browser OAuth and authenticated rendering, local nonce relay, browser-denial cancellation, loopback timeout, injected credential stores, read-only mutation refusal, whole list models, filtering, rich entry metadata, and source mapping. |
 | #112 | Sanitized current-contract feed/profile fixtures, five profile statuses, explicit one-based pagination, numeric categories, missing fields, fail-closed adult filtering, changed-markup isolation plus a live parser-aware `doctor` probe, trusted-host highest-rendition selection, and ordinary public Player routing without Episode continuation. |
