@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/gridness/a365/compare/v2.4.0...v3.0.0) (2026-08-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* the primary executable, application home, package, release artifacts, and public product name become a365; a365dt remains as a one-major-release compatibility executable.
+
+### Features
+
+* deliver a365 v3 ([#115](https://github.com/gridness/a365/issues/115)) ([fab9da7](https://github.com/gridness/a365/commit/fab9da7632b6c2daa392720ffd39ee0424cc6f1a))
+
 ## [2.4.0](https://github.com/Gridness/a365dt/compare/v2.3.0...v2.4.0) (2026-08-02)
 
 
