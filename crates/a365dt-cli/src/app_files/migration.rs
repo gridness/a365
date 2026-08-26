@@ -67,20 +67,10 @@ pub(crate) async fn prepare_for_command() -> Result<(), Error> {
 	let Preparation::Migration(migration) = preparation else {
 		return Ok(());
 	};
-	if !ui::selector::interactive_terminal() {
-		return Err(Error::new(
-			"Application files must move to the new Application home. Run a365dt interactively once to approve the migration.",
-		));
-	}
-
-	ui::heading("Application file migration");
-	ui::note(
-		"a365dt now keeps its application files in one predictable location.",
-	);
-	ui::grid(&migration.moves());
-	ui::warning("Older a365dt versions will not find the moved files.");
-	if !ui::confirm("Move application files now?", true)? {
-		return Err(Error::new("Application file migration declined."));
+	if ui::selector::interactive_terminal() {
+		ui::heading("Application file migration");
+		ui::note("a365 is moving existing application files to ~/.a365.");
+		ui::grid(&migration.moves());
 	}
 	let telemetry_database = migration
 		.legacy_telemetry_database()
@@ -117,7 +107,7 @@ pub(crate) async fn prepare_for_command() -> Result<(), Error> {
 			None,
 		];
 		let Some(recovery) =
-			recoveries[ui::choose("How should a365dt proceed?", &rows)?]
+			recoveries[ui::choose("How should a365 proceed?", &rows)?]
 		else {
 			return Err(Error::new("Application file migration cancelled."));
 		};

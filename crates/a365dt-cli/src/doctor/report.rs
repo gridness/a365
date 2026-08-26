@@ -41,7 +41,7 @@ impl Report {
 	}
 
 	pub fn print(&self) {
-		ui::heading("a365dt doctor");
+		ui::heading("a365 doctor");
 		let status = self.status();
 		println!(
 			"{}",

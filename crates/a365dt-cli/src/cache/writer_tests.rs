@@ -3,15 +3,22 @@ use std::{fs, process, time::SystemTime};
 use pretty_assertions::assert_eq;
 
 use super::{Catalogue, Store};
-use crate::{api::Series, telemetry::Recorder};
+use crate::{
+	api::Series,
+	content::{ContentSource, SeriesKey},
+	telemetry::Recorder,
+};
 
 fn series(id: u64, title: &str) -> Series {
 	Series {
+		source: ContentSource::Anime365,
 		id,
 		title: title.into(),
 		year: Some(2024),
 		type_title: Some("TV".into()),
 		number_of_episodes: Some(12),
+		my_anime_list_id: None,
+		anilist_id: None,
 		poster_url_small: None,
 		episodes: Vec::new(),
 	}
@@ -28,7 +35,7 @@ fn matching_series(catalogue: &mut Catalogue, query: &str) -> Vec<Series> {
 #[tokio::test]
 async fn semantic_writer_drains_every_mutation_before_finishing() {
 	let directory = std::env::temp_dir().join(format!(
-		"a365dt-cache-writer-{}-{}",
+		"a365-cache-writer-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)
@@ -47,15 +54,15 @@ async fn semantic_writer_drains_every_mutation_before_finishing() {
 
 	catalogue.upsert(vec![discovered.clone(), missing.clone()]);
 	writer.discover(vec![discovered.clone(), missing]);
-	catalogue.remember_alias("known", discovered.id);
+	catalogue.remember_alias("known", discovered.key());
 	writer.remember_alias("known".into(), discovered.clone());
-	catalogue.remove_series(2);
-	writer.remove_missing(2);
+	catalogue.remove_series(SeriesKey::new(ContentSource::Anime365, 2));
+	writer.remove_missing(SeriesKey::new(ContentSource::Anime365, 2));
 	catalogue.merge_refresh(
 		Catalogue::refreshed(vec![refreshed.clone()]),
-		&[discovered.id].into(),
+		&[discovered.key()].into(),
 	);
-	writer.commit_refresh(vec![refreshed.clone()]);
+	writer.commit_refresh(ContentSource::Anime365, vec![refreshed.clone()]);
 	writer.finish().await.unwrap();
 
 	let (mut loaded, loaded_writer) = store
@@ -102,7 +109,7 @@ async fn stale_removal_preserves_a_concurrent_alias_update() {
 	let updated = series(1, "Updated");
 	concurrent.remember_alias("known".into(), updated.clone());
 	concurrent.finish().await.unwrap();
-	stale.remove_missing(updated.id);
+	stale.remove_missing(updated.key());
 	stale.finish().await.unwrap();
 
 	let (mut loaded, writer) = store
@@ -128,7 +135,7 @@ async fn refresh_preserves_newer_discoveries_and_newer_refreshes_win() {
 		.await
 		.unwrap()
 		.into_session(&store, Recorder::default());
-	seed.commit_refresh(vec![original]);
+	seed.commit_refresh(ContentSource::Anime365, vec![original]);
 	seed.finish().await.unwrap();
 
 	let (_, stale_refresh) = store
@@ -146,7 +153,10 @@ async fn refresh_preserves_newer_discoveries_and_newer_refreshes_win() {
 	let discovered = series(2, "Discovered");
 	discover.discover(vec![concurrently_updated.clone(), discovered.clone()]);
 	discover.finish().await.unwrap();
-	stale_refresh.commit_refresh(vec![series(1, "Stale refresh")]);
+	stale_refresh.commit_refresh(
+		ContentSource::Anime365,
+		vec![series(1, "Stale refresh")],
+	);
 	stale_refresh.finish().await.unwrap();
 	let (mut loaded, writer) = store
 		.load_catalogue()
@@ -170,9 +180,10 @@ async fn refresh_preserves_newer_discoveries_and_newer_refreshes_win() {
 		.unwrap()
 		.into_session(&concurrent_store, Recorder::default());
 	let newest = series(1, "Newest");
-	newer_refresh.commit_refresh(vec![newest.clone()]);
+	newer_refresh.commit_refresh(ContentSource::Anime365, vec![newest.clone()]);
 	newer_refresh.finish().await.unwrap();
-	older_refresh.commit_refresh(vec![series(1, "Older")]);
+	older_refresh
+		.commit_refresh(ContentSource::Anime365, vec![series(1, "Older")]);
 	older_refresh.finish().await.unwrap();
 
 	let (mut loaded, writer) = store
@@ -190,7 +201,7 @@ async fn refresh_preserves_newer_discoveries_and_newer_refreshes_win() {
 
 fn temporary_directory(name: &str) -> std::path::PathBuf {
 	std::env::temp_dir().join(format!(
-		"a365dt-cache-writer-{name}-{}-{}",
+		"a365-cache-writer-{name}-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)

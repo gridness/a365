@@ -1,11 +1,15 @@
 use pretty_assertions::assert_eq;
 
-use super::{RangePlan, plan_range};
-use crate::api::Episode;
+use super::{RangePlan, TrackKey, plan_range, translation_for_track};
+use crate::{
+	api::{Episode, Translation},
+	content::ContentSource,
+};
 
 #[test]
 fn plans_overlapping_ranges_with_fractional_episodes() {
 	let episode = |id, number: &str| Episode {
+		source: ContentSource::Anime365,
 		id,
 		episode_int: number.into(),
 		episode_full: format!("Episode {number}"),
@@ -42,5 +46,40 @@ fn rejects_overlapping_ranges_wider_than_limit() {
 			"Enter ascending ranges no wider than 10,000 episodes after merging overlaps."
 				.into()
 		)
+	);
+}
+
+#[test]
+fn continuation_track_lookup_requires_exact_next_episode_coverage() {
+	let episode = Episode {
+		source: ContentSource::Anime365,
+		id: 2,
+		episode_int: "2".into(),
+		episode_full: "Episode 2".into(),
+	};
+	let translation = Translation {
+		source: ContentSource::Anime365,
+		id: 20,
+		episode_id: episode.id,
+		kind: "sub".into(),
+		language: "ru".into(),
+		authors_summary: "Team".into(),
+	};
+	let track = TrackKey {
+		kind: "sub".into(),
+		language: "ru".into(),
+		authors: "Team".into(),
+	};
+
+	assert_eq!(
+		(
+			translation_for_track(
+				std::slice::from_ref(&translation),
+				&episode,
+				&track
+			),
+			translation_for_track(&[], &episode, &track),
+		),
+		(Some(translation), None),
 	);
 }

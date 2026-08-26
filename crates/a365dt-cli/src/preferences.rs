@@ -23,6 +23,25 @@ pub(crate) struct Preferences {
 	pub output: PathBuf,
 	pub jobs: NonZeroUsize,
 	pub mux: bool,
+	pub adult: bool,
+	pub adult_telemetry: bool,
+	pub auto_play_next_episode: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AdultContent {
+	Hidden,
+	Visible,
+}
+
+impl Preferences {
+	pub(crate) const fn adult_content(&self) -> AdultContent {
+		if self.adult {
+			AdultContent::Visible
+		} else {
+			AdultContent::Hidden
+		}
+	}
 }
 
 #[derive(Default)]
@@ -44,6 +63,9 @@ struct Sources {
 	output: Source,
 	jobs: Source,
 	mux: Source,
+	adult: Source,
+	adult_telemetry: Source,
+	auto_play_next_episode: Source,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -72,6 +94,9 @@ struct FilePreferences {
 	output: Option<String>,
 	jobs: Option<NonZeroUsize>,
 	mux: Option<bool>,
+	adult: Option<bool>,
+	adult_telemetry: Option<bool>,
+	auto_play_next_episode: Option<bool>,
 }
 
 enum FileState {
@@ -206,12 +231,27 @@ impl Store {
 		} else {
 			(false, Source::BuiltIn)
 		};
+		let (adult, adult_source) = configured_bool(file.adult);
+		let (adult_telemetry, adult_telemetry_source) =
+			configured_bool(file.adult_telemetry);
+		let (auto_play_next_episode, auto_play_next_episode_source) =
+			configured_bool(file.auto_play_next_episode);
 		Ok(Snapshot {
-			preferences: Preferences { output, jobs, mux },
+			preferences: Preferences {
+				output,
+				jobs,
+				mux,
+				adult,
+				adult_telemetry,
+				auto_play_next_episode,
+			},
 			sources: Sources {
 				output: output_source,
 				jobs: jobs_source,
 				mux: mux_source,
+				adult: adult_source,
+				adult_telemetry: adult_telemetry_source,
+				auto_play_next_episode: auto_play_next_episode_source,
 			},
 		})
 	}
@@ -248,9 +288,12 @@ impl Store {
 			output: Some(output.to_owned()),
 			jobs: Some(preferences.jobs),
 			mux: Some(preferences.mux),
+			adult: Some(preferences.adult),
+			adult_telemetry: Some(preferences.adult_telemetry),
+			auto_play_next_episode: Some(preferences.auto_play_next_episode),
 		})
 		.map_err(|error| {
-			Error::with_debug("Could not encode Download preferences.", error)
+			Error::with_debug("Could not encode preferences.", error)
 		})?;
 		let temporary = path.with_file_name(format!(
 			"config.toml.{}.{}.tmp",
@@ -336,6 +379,13 @@ impl Store {
 
 	fn file(&self) -> PathBuf {
 		self.application_home.join("config.toml")
+	}
+}
+
+fn configured_bool(value: Option<bool>) -> (bool, Source) {
+	match value {
+		Some(value) => (value, Source::Config),
+		None => (false, Source::BuiltIn),
 	}
 }
 

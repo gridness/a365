@@ -1,16 +1,16 @@
 Use `--query` when a Series title matches a command name.
-Run `a365dt doctor` to check the tool's health.
+Run `a365 doctor` to check the tool's health.
 Install [FFmpeg](https://ffmpeg.org/) to mux separate ASS subtitles into MKV files.
 Run the same command again to resume preserved `.part` downloads.
 Use `--jobs N` to change download concurrency. *Beware of rate limits though!*
-Use `a365dt telemetry show` to inspect locally collected fields.
+Use `a365 telemetry show` to inspect locally collected fields.
 Use `--output DIR` to choose the download location.
 There is no cow level.
-See your usage with `a365dt stats`.
-Tired of setting parameters all the time? Try `a365dt config`.
-You can manually change configuration by editing `~/.a365dt/config.toml`.
-Coming from an older version? `a365dt` handles nerd stuff for you!
-You can safely run multiple `a365dt` tools at the same time.
+See your usage with `a365 stats`.
+Tired of setting parameters all the time? Try `a365 config`.
+You can manually change configuration by editing `~/.a365/config.toml`.
+Coming from an older version? `a365` handles nerd stuff for you!
+You can safely run multiple `a365` tools at the same time.
 Homebrew version recieves updates first and automatically.
 Homebrew version comes with `ffmpeg-full` dependency added for you and shell completions pre-installed.
 All search features of Anime365 are preserved.

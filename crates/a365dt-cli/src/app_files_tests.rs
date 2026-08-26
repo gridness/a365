@@ -102,6 +102,105 @@ fn preserves_configuration_during_legacy_application_state_migration() {
 }
 
 #[test]
+fn migrates_configuration_from_the_renamed_application_home() {
+	let fixture = Fixture::new("renamed-configuration");
+	fs::write(fixture.legacy.join("config.toml"), b"adult = true\n").unwrap();
+
+	fixture
+		.migration()
+		.lock()
+		.unwrap()
+		.stage()
+		.unwrap()
+		.commit()
+		.unwrap();
+
+	assert_eq!(
+		fs::read(fixture.paths.root.join("config.toml")).unwrap(),
+		b"adult = true\n"
+	);
+}
+
+#[test]
+fn new_only_application_state_is_left_unchanged() {
+	let fixture = Fixture::new("new-only");
+	fs::remove_dir_all(&fixture.legacy).unwrap();
+	fs::create_dir_all(&fixture.paths.cache).unwrap();
+	fs::write(fixture.paths.cache.join("cache.sqlite"), b"current").unwrap();
+
+	let preparation = prepare_at(
+		fixture.paths.clone(),
+		std::slice::from_ref(&fixture.legacy),
+	)
+	.unwrap();
+
+	assert!(matches!(preparation, Preparation::Ready));
+	assert_eq!(
+		fs::read(fixture.paths.cache.join("cache.sqlite")).unwrap(),
+		b"current"
+	);
+}
+
+#[test]
+fn completed_application_state_migration_is_idempotent() {
+	let fixture = Fixture::new("repeated");
+	fixture
+		.migration()
+		.lock()
+		.unwrap()
+		.stage()
+		.unwrap()
+		.commit()
+		.unwrap();
+
+	let repeated = prepare_at(
+		fixture.paths.clone(),
+		std::slice::from_ref(&fixture.legacy),
+	)
+	.unwrap();
+
+	assert!(matches!(repeated, Preparation::Ready));
+	assert_eq!(
+		fs::read(fixture.paths.cache.join("cache.sqlite")).unwrap(),
+		b"cache"
+	);
+}
+
+#[test]
+fn interrupted_tombstones_restore_or_discard_according_to_commit_state() {
+	let restoring = Fixture::new("restore-tombstone");
+	let restoring_tombstone =
+		super::migration::tombstone_path(&restoring.legacy).unwrap();
+	fs::rename(&restoring.legacy, &restoring_tombstone).unwrap();
+	super::migration::recover_tombstones(
+		&restoring.paths,
+		std::slice::from_ref(&restoring.legacy),
+	)
+	.unwrap();
+
+	let committed = Fixture::new("discard-tombstone");
+	fs::create_dir_all(&committed.paths.root).unwrap();
+	let committed_tombstone =
+		super::migration::tombstone_path(&committed.legacy).unwrap();
+	fs::rename(&committed.legacy, &committed_tombstone).unwrap();
+	super::migration::recover_tombstones(
+		&committed.paths,
+		std::slice::from_ref(&committed.legacy),
+	)
+	.unwrap();
+
+	assert_eq!(
+		(
+			restoring.legacy.exists(),
+			restoring_tombstone.exists(),
+			committed.legacy.exists(),
+			committed_tombstone.exists(),
+		),
+		(true, false, false, false),
+	);
+}
+
+#[test]
 fn rejects_unrecognized_legacy_files_without_creating_the_home() {
 	let fixture = Fixture::new("unknown");
 	let unknown = fixture.legacy.join("mystery.db");
@@ -163,7 +262,7 @@ fn active_legacy_state_blocks_migration() {
 
 		assert_eq!(
 			error.to_string(),
-			"Legacy application state is in use; close other a365dt processes and retry."
+			"Legacy application state is in use; close other a365 or a365dt processes and retry."
 		);
 		assert_eq!(fixture.cache(), b"cache");
 		assert!(!fixture.paths.root.exists());
@@ -217,7 +316,7 @@ impl Fixture {
 		let legacy = base.join("legacy");
 		fs::create_dir_all(&legacy).unwrap();
 		fs::write(legacy.join("cache.sqlite"), b"cache").unwrap();
-		let paths = Paths::at(base.join(".a365dt"));
+		let paths = Paths::at(base.join(".a365"));
 		Self {
 			base,
 			legacy,

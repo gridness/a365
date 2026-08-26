@@ -69,7 +69,7 @@ pub(super) fn authorize_full_clear(
 		(FullClearPermission::Ask, TerminalAccess::Interactive) => confirm(),
 		(FullClearPermission::Ask, TerminalAccess::NonInteractive) => {
 			Err(Error::new(
-				"Run `a365dt telemetry clear --yes` to clear all local \
+				"Run `a365 telemetry clear --yes` to clear all local \
 				 telemetry without terminal confirmation.",
 			))
 		}

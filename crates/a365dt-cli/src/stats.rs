@@ -13,7 +13,7 @@ mod metrics;
 use metrics::{Aggregate, aggregate};
 
 pub async fn run(store: &Store, telemetry: &TelemetryWriter) {
-	ui::heading("a365dt stats");
+	ui::heading("a365 stats");
 	let cache = store.inspect().await;
 	let telemetry = telemetry.snapshot().await;
 	let rows = statistic_checks(&cache, &telemetry)
@@ -193,7 +193,7 @@ fn cache_statistics(cache: &CacheInspection) -> Vec<Check> {
 		CacheInspection::Broken { path, bytes, .. } => vec![
 			Check::new("Cache path", path.display().to_string(), Status::Info),
 			Check::new("Last cache update", "Unavailable", Status::Info)
-				.remedy("Run `a365dt cache prune`"),
+				.remedy("Run `a365 cache prune`"),
 			Check::new(
 				"Cached Series",
 				bytes.map_or_else(
@@ -202,7 +202,7 @@ fn cache_statistics(cache: &CacheInspection) -> Vec<Check> {
 				),
 				Status::Info,
 			)
-			.remedy("Run `a365dt cache prune`"),
+			.remedy("Run `a365 cache prune`"),
 		],
 	}
 }

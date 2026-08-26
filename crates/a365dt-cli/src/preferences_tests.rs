@@ -31,6 +31,9 @@ fn resolves_sparse_download_preferences_with_cli_precedence() {
 			output: fixture.home.join("Videos"),
 			jobs: NonZeroUsize::new(2).unwrap(),
 			mux: true,
+			adult: false,
+			adult_telemetry: false,
+			auto_play_next_episode: false,
 		}
 	);
 }
@@ -102,6 +105,9 @@ fn saves_loads_and_resets_download_preferences() {
 		output: fixture.home.join("Anime"),
 		jobs: NonZeroUsize::new(8).unwrap(),
 		mux: true,
+		adult: true,
+		adult_telemetry: true,
+		auto_play_next_episode: true,
 	};
 
 	store.save(&expected).unwrap();
@@ -115,6 +121,9 @@ fn saves_loads_and_resets_download_preferences() {
 			output: fixture.current_directory.clone(),
 			jobs: NonZeroUsize::new(4).unwrap(),
 			mux: false,
+			adult: false,
+			adult_telemetry: false,
+			auto_play_next_episode: false,
 		}
 	);
 }
@@ -134,13 +143,45 @@ fn reports_the_source_of_every_download_preference() {
 					output: fixture.current_directory.clone(),
 					jobs: NonZeroUsize::new(8).unwrap(),
 					mux: false,
+					adult: false,
+					adult_telemetry: false,
+					auto_play_next_episode: false,
 				},
 				sources: Sources {
 					output: Source::BuiltIn,
 					jobs: Source::Config,
 					mux: Source::BuiltIn,
+					adult: Source::BuiltIn,
+					adult_telemetry: Source::BuiltIn,
+					auto_play_next_episode: Source::BuiltIn,
 				},
 			},
+		}
+	);
+}
+
+#[test]
+fn resolves_content_privacy_and_playback_preferences_from_config() {
+	let fixture = Fixture::new("content-playback");
+	fs::write(
+		fixture.application_home.join("config.toml"),
+		concat!(
+			"adult = true\n",
+			"adult_telemetry = true\n",
+			"auto_play_next_episode = true\n",
+		),
+	)
+	.unwrap();
+
+	assert_eq!(
+		fixture.store().load(Overrides::default()).unwrap(),
+		Preferences {
+			output: fixture.current_directory.clone(),
+			jobs: NonZeroUsize::new(4).unwrap(),
+			mux: false,
+			adult: true,
+			adult_telemetry: true,
+			auto_play_next_episode: true,
 		}
 	);
 }
@@ -193,14 +234,14 @@ struct Fixture {
 impl Fixture {
 	fn new(name: &str) -> Self {
 		let root = std::env::temp_dir().join(format!(
-			"a365dt-preferences-{name}-{}-{}",
+			"a365-preferences-{name}-{}-{}",
 			process::id(),
 			SystemTime::now()
 				.duration_since(SystemTime::UNIX_EPOCH)
 				.unwrap()
 				.as_nanos()
 		));
-		let application_home = root.join(".a365dt");
+		let application_home = root.join(".a365");
 		let home = root.join("home");
 		let current_directory = root.join("working");
 		for directory in [&application_home, &home, &current_directory] {

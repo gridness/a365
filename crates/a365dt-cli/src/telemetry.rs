@@ -23,7 +23,8 @@ pub(crate) use migration::{
 	prepare_migration_at, recreate_migration_at,
 };
 pub(crate) use recording::{
-	CatalogueUse, Command, CommandOutcome, InvocationId, Operation, Recorder,
+	CatalogueUse, Command, CommandOutcome, InvocationId, Operation,
+	PlaybackOutcome, Recorder, SeriesRecording,
 };
 use recording::{Observation, ObservationKind};
 pub(crate) use snapshot::{PerformanceMetric, Snapshot};

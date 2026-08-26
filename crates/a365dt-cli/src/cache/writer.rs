@@ -8,6 +8,7 @@ use tokio::{
 use super::{Catalogue, Store};
 use crate::{
 	api::Series,
+	content::{ContentSource, SeriesKey},
 	error::Error,
 	telemetry::{Operation, Recorder},
 };
@@ -24,15 +25,21 @@ pub(crate) struct Writer {
 
 enum Message {
 	Discover(Vec<Series>),
-	RememberAlias { query: String, series: Series },
-	RemoveMissing(u64),
-	CommitRefresh(Vec<Series>),
+	RememberAlias {
+		query: String,
+		series: Series,
+	},
+	RemoveMissing(SeriesKey),
+	CommitRefresh {
+		source: ContentSource,
+		series: Vec<Series>,
+	},
 }
 
 struct State {
 	base_revision: i64,
-	revisions: HashMap<u64, i64>,
-	series: HashSet<u64>,
+	revisions: HashMap<SeriesKey, i64>,
+	series: HashSet<SeriesKey>,
 }
 
 enum WriterState {
@@ -44,7 +51,7 @@ impl LoadedCatalogue {
 	pub(super) fn new(
 		catalogue: Catalogue,
 		base_revision: i64,
-		revisions: HashMap<u64, i64>,
+		revisions: HashMap<SeriesKey, i64>,
 	) -> Self {
 		Self {
 			state: WriterState::Available(State {
@@ -71,6 +78,10 @@ impl LoadedCatalogue {
 		let writer = Writer::start(store.clone(), self.state, telemetry);
 		(self.catalogue, writer)
 	}
+
+	pub(crate) fn into_catalogue(self) -> Catalogue {
+		self.catalogue
+	}
 }
 
 impl Writer {
@@ -88,12 +99,19 @@ impl Writer {
 		let _ = self.messages.send(Message::RememberAlias { query, series });
 	}
 
-	pub(crate) fn remove_missing(&self, series_id: u64) {
-		let _ = self.messages.send(Message::RemoveMissing(series_id));
+	pub(crate) fn remove_missing(&self, key: SeriesKey) {
+		let _ = self.messages.send(Message::RemoveMissing(key));
 	}
 
-	pub(crate) fn commit_refresh(&self, ordered_series: Vec<Series>) {
-		let _ = self.messages.send(Message::CommitRefresh(ordered_series));
+	pub(crate) fn commit_refresh(
+		&self,
+		source: ContentSource,
+		ordered_series: Vec<Series>,
+	) {
+		let _ = self.messages.send(Message::CommitRefresh {
+			source,
+			series: ordered_series,
+		});
 	}
 
 	pub(crate) async fn finish(self) -> Result<(), Error> {
@@ -134,10 +152,8 @@ impl State {
 	) -> Result<(), Error> {
 		match message {
 			Message::Discover(series) => {
-				let ids = series
-					.iter()
-					.map(|series| series.id)
-					.collect::<HashSet<_>>();
+				let ids =
+					series.iter().map(Series::key).collect::<HashSet<_>>();
 				if let Some(revision) = store.discover(series).await? {
 					for id in ids {
 						self.series.insert(id);
@@ -146,35 +162,36 @@ impl State {
 				}
 			}
 			Message::RememberAlias { query, series } => {
-				let id = series.id;
+				let key = series.key();
 				if let Some(revision) =
 					store.remember_alias(query, series).await?
 				{
-					self.series.insert(id);
-					self.revisions.insert(id, revision);
+					self.series.insert(key);
+					self.revisions.insert(key, revision);
 				}
 			}
-			Message::RemoveMissing(series_id) => {
+			Message::RemoveMissing(key) => {
 				store
-					.remove_missing(
-						series_id,
-						self.revisions.get(&series_id).copied(),
-					)
+					.remove_missing(key, self.revisions.get(&key).copied())
 					.await?;
-				self.series.remove(&series_id);
-				self.revisions.remove(&series_id);
+				self.series.remove(&key);
+				self.revisions.remove(&key);
 			}
-			Message::CommitRefresh(series) => {
-				let ids = series
-					.iter()
-					.map(|series| series.id)
-					.collect::<HashSet<_>>();
-				if let Some(revision) =
-					store.commit_refresh(series, self.base_revision).await?
+			Message::CommitRefresh { source, series } => {
+				let ids =
+					series.iter().map(Series::key).collect::<HashSet<_>>();
+				if let Some(revision) = store
+					.commit_refresh(source, series, self.base_revision)
+					.await?
 				{
 					self.base_revision = revision;
 					self.series.extend(&ids);
-					for id in self.series.iter().copied() {
+					for id in self
+						.series
+						.iter()
+						.copied()
+						.filter(|key| key.source == source)
+					{
 						self.revisions.insert(id, revision);
 					}
 				}

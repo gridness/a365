@@ -5,6 +5,7 @@ use indicatif::{HumanBytes, HumanDuration};
 use crate::{
 	cache::{Inspection as CacheInspection, MAX_AGE, Store},
 	error::Error,
+	playback,
 	preferences::{self, Inspection as PreferencesInspection},
 	startup::{self, Update},
 	telemetry::{self, PerformanceMetric, Snapshot, Writer as TelemetryWriter},
@@ -17,6 +18,17 @@ pub(crate) use report::{Check, Status};
 use report::{Report, Section};
 use server::Probe as ServerProbe;
 
+struct HealthInputs<'a> {
+	server: &'a ServerProbe,
+	community: &'a ServerProbe,
+	h365: Option<&'a ServerProbe>,
+	player: &'a Result<std::path::PathBuf, Error>,
+	cache: &'a CacheInspection,
+	snapshot: &'a Result<Snapshot, Error>,
+	preferences: &'a Result<PreferencesInspection, Error>,
+	debug: bool,
+}
+
 pub async fn run(
 	store: &Store,
 	telemetry_writer: &TelemetryWriter,
@@ -24,20 +36,36 @@ pub async fn run(
 ) -> ExitCode {
 	let preferences =
 		preferences::Store::discover().map(|store| store.inspect());
-	let (server, update, cache) =
-		tokio::join!(server::probe(), startup::check(store), store.inspect());
+	let adult = adult_enabled(&preferences);
+	let player = playback::inspect_player();
+	let (server, community, h365, update, cache) = tokio::join!(
+		server::probe(),
+		server::probe_community(),
+		async {
+			if adult {
+				Some(server::probe_h365().await)
+			} else {
+				None
+			}
+		},
+		startup::check(store),
+		store.inspect()
+	);
 	let telemetry = telemetry_writer.snapshot().await;
 	let mut sections = vec![
 		Section {
 			title: "Health",
 			debug: false,
-			checks: health_checks(
-				&server,
-				&cache,
-				&telemetry,
-				&preferences,
+			checks: health_checks(HealthInputs {
+				server: &server,
+				community: &community,
+				h365: h365.as_ref(),
+				player: &player,
+				cache: &cache,
+				snapshot: &telemetry,
+				preferences: &preferences,
 				debug,
-			),
+			}),
 		},
 		Section {
 			title: "Build",
@@ -64,13 +92,17 @@ pub async fn run(
 	report.exit_code()
 }
 
-fn health_checks(
-	server: &ServerProbe,
-	cache: &CacheInspection,
-	snapshot: &Result<Snapshot, Error>,
-	preferences: &Result<PreferencesInspection, Error>,
-	debug: bool,
-) -> Vec<Check> {
+fn health_checks(inputs: HealthInputs<'_>) -> Vec<Check> {
+	let HealthInputs {
+		server,
+		community,
+		h365,
+		player,
+		cache,
+		snapshot,
+		preferences,
+		debug,
+	} = inputs;
 	let server = match server.status {
 		Status::Error => Check::new("Anime365", &server.summary, server.status)
 			.remedy("Check the network or Anime365 status, then retry"),
@@ -81,6 +113,44 @@ fn health_checks(
 		Status::Healthy | Status::Info => {
 			Check::new("Anime365", &server.summary, server.status)
 		}
+	};
+	let h365 = h365.map(|probe| match probe.status {
+		Status::Error => Check::new("H365", &probe.summary, probe.status)
+			.remedy("Check H365 access or disable adult content"),
+		Status::Warning => Check::new("H365", &probe.summary, probe.status)
+			.remedy("Retry; H365 failures do not block Anime365"),
+		Status::Healthy | Status::Info => {
+			Check::new("H365", &probe.summary, probe.status)
+		}
+	});
+	let community = match community.status {
+		Status::Error => Check::new(
+			"Anime365 community",
+			&community.summary,
+			Status::Warning,
+		)
+		.remedy("Moments and public profile enrichment may be unavailable; core search and playback are unaffected"),
+		Status::Warning => Check::new(
+			"Anime365 community",
+			&community.summary,
+			Status::Warning,
+		),
+		Status::Healthy | Status::Info => Check::new(
+			"Anime365 community",
+			&community.summary,
+			community.status,
+		),
+	};
+	let player = match player {
+		Ok(path) => {
+			Check::new("Player", path.display().to_string(), Status::Healthy)
+		}
+		Err(error) => Check::new("Player", error.message(), Status::Error)
+			.remedy(if cfg!(target_os = "macos") {
+				"Install IINA to enable Playback"
+			} else {
+				"Install mpv and add it to PATH to enable Playback"
+			}),
 	};
 	let cache = match cache {
 		CacheInspection::Ready { fresh: true, .. } => {
@@ -102,7 +172,7 @@ fn health_checks(
 		}
 		CacheInspection::Broken { .. } => {
 			Check::new("Series cache", "Unreadable", Status::Error)
-				.remedy("Run `a365dt cache prune` to reset it")
+				.remedy("Run `a365 cache prune` to reset it")
 		}
 	};
 	let telemetry = match snapshot {
@@ -110,14 +180,29 @@ fn health_checks(
 			Check::new("Local telemetry", "Enabled", Status::Healthy)
 		}
 		Ok(_) => Check::new("Local telemetry", "Disabled", Status::Warning)
-			.remedy("Run `a365dt telemetry enable` to resume observations"),
+			.remedy("Run `a365 telemetry enable` to resume observations"),
 		Err(error) => {
 			Check::new("Local telemetry", error.render(debug), Status::Error)
-				.remedy("Run `a365dt doctor --debug` to inspect its database")
+				.remedy("Run `a365 doctor --debug` to inspect its database")
 		}
 	};
 	let preferences = preference_check(preferences, debug);
-	vec![server, cache, telemetry, preferences]
+	let mut checks = vec![server, community];
+	checks.extend(h365);
+	checks.extend([player, cache, telemetry, preferences]);
+	checks
+}
+
+fn adult_enabled(inspection: &Result<PreferencesInspection, Error>) -> bool {
+	match inspection {
+		Ok(PreferencesInspection::Missing { snapshot, .. })
+		| Ok(PreferencesInspection::Ready { snapshot, .. }) => {
+			snapshot.preferences.adult
+		}
+		Ok(PreferencesInspection::Invalid { .. })
+		| Ok(PreferencesInspection::Unreadable { .. })
+		| Err(_) => false,
+	}
 }
 
 fn preference_check(
@@ -125,38 +210,32 @@ fn preference_check(
 	debug: bool,
 ) -> Check {
 	match inspection {
-		Ok(PreferencesInspection::Missing { .. }) => Check::new(
-			"Download preferences",
-			"Built-in defaults",
-			Status::Info,
-		),
+		Ok(PreferencesInspection::Missing { .. }) => {
+			Check::new("Preferences", "Built-in defaults", Status::Info)
+		}
 		Ok(PreferencesInspection::Ready { .. }) => {
-			Check::new("Download preferences", "Configured", Status::Healthy)
+			Check::new("Preferences", "Configured", Status::Healthy)
 		}
 		Ok(PreferencesInspection::Invalid { error, .. })
 		| Ok(PreferencesInspection::Unreadable { error, .. })
-		| Err(error) => Check::new(
-			"Download preferences",
-			error.render(debug),
-			Status::Error,
-		)
-		.remedy(
-			"Run `a365dt config` to repair or `a365dt config reset` to remove it",
-		),
+		| Err(error) => Check::new("Preferences", error.render(debug), Status::Error)
+			.remedy(
+				"Run `a365 config` to repair or `a365 config reset` to remove it",
+			),
 	}
 }
 
 fn build_checks(update: &Result<Option<Update>, Error>) -> Vec<Check> {
 	vec![
 		version_check(update),
-		Check::new("Commit", env!("A365DT_COMMIT_SHA"), Status::Info),
-		Check::new("Profile", env!("A365DT_BUILD_PROFILE"), Status::Info),
+		Check::new("Commit", env!("A365_COMMIT_SHA"), Status::Info),
+		Check::new("Profile", env!("A365_BUILD_PROFILE"), Status::Info),
 		Check::new(
 			"Platform",
 			format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
 			Status::Info,
 		),
-		Check::new("Compiler", env!("A365DT_RUSTC"), Status::Info),
+		Check::new("Compiler", env!("A365_RUSTC"), Status::Info),
 	]
 }
 
@@ -167,7 +246,7 @@ fn version_check(update: &Result<Option<Update>, Error>) -> Check {
 			format!("{} → {} available", update.installed, update.available),
 			Status::Warning,
 		)
-		.remedy("Run `a365dt update`"),
+		.remedy("Run `a365 update`"),
 		Ok(None) => Check::new(
 			"Version",
 			concat!(env!("CARGO_PKG_VERSION"), " · up to date"),
@@ -401,6 +480,21 @@ fn preference_debug_checks(
 				},
 				Status::Info,
 			),
+			Check::new(
+				"Adult content",
+				enabled_label(snapshot.preferences.adult),
+				Status::Info,
+			),
+			Check::new(
+				"Adult telemetry detail",
+				enabled_label(snapshot.preferences.adult_telemetry),
+				Status::Info,
+			),
+			Check::new(
+				"Automatic next Episode",
+				enabled_label(snapshot.preferences.auto_play_next_episode),
+				Status::Info,
+			),
 		],
 		Ok(PreferencesInspection::Invalid { path, error })
 		| Ok(PreferencesInspection::Unreadable { path, error }) => vec![
@@ -411,6 +505,10 @@ fn preference_debug_checks(
 			vec![Check::new("Config detail", error.message(), Status::Info)]
 		}
 	}
+}
+
+fn enabled_label(value: bool) -> &'static str {
+	if value { "Enabled" } else { "Disabled" }
 }
 
 fn performance_detail(metric: &PerformanceMetric) -> String {

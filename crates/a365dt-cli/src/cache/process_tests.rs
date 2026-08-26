@@ -14,6 +14,7 @@ use super::{
 };
 use crate::{
 	api::Series,
+	content::{ContentSource, SeriesKey},
 	telemetry::{Recorder, ensure_migration_idle},
 };
 
@@ -221,7 +222,7 @@ async fn worker_stale_delete() {
 		.into_session(&store, Recorder::default());
 	barrier("LOADED");
 	wait_for_input("REMOVE");
-	writer.remove_missing(10);
+	writer.remove_missing(SeriesKey::new(ContentSource::Anime365, 10));
 	writer.finish().await.unwrap();
 	barrier("REMOVED");
 	store.close().await;
@@ -256,7 +257,7 @@ async fn worker_stale_refresh() {
 		.into_session(&store, Recorder::default());
 	barrier("LOADED");
 	let title = read_input();
-	writer.commit_refresh(vec![series(1, &title)]);
+	writer.commit_refresh(ContentSource::Anime365, vec![series(1, &title)]);
 	writer.finish().await.unwrap();
 	store.close().await;
 	barrier("REFRESHED");
@@ -377,7 +378,7 @@ fn telemetry_migration_lock() {
 	};
 	assert_eq!(
 		error.to_string(),
-		"Legacy application state is in use; close other a365dt processes and retry."
+		"Legacy application state is in use; close other a365 processes and retry."
 	);
 	worker.send("FINISH");
 	worker.finish();
@@ -474,11 +475,14 @@ fn matching_series(catalogue: &mut Catalogue, query: &str) -> Vec<Series> {
 
 fn series(id: u64, title: &str) -> Series {
 	Series {
+		source: ContentSource::Anime365,
 		id,
 		title: title.into(),
 		year: Some(2024),
 		type_title: Some("TV".into()),
 		number_of_episodes: Some(12),
+		my_anime_list_id: None,
+		anilist_id: None,
 		poster_url_small: None,
 		episodes: Vec::new(),
 	}
@@ -486,7 +490,7 @@ fn series(id: u64, title: &str) -> Series {
 
 fn temporary_directory(name: &str) -> PathBuf {
 	std::env::temp_dir().join(format!(
-		"a365dt-cache-process-{name}-{}-{}",
+		"a365-cache-process-{name}-{}-{}",
 		process::id(),
 		SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)

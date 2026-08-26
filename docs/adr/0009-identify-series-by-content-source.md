@@ -1,0 +1,3 @@
+# Identify Series by Content source
+
+a365 identifies Series, Episodes, Translations, catalogue rows, and aliases within their Content source rather than by an unqualified remote integer. Anime365 remains enabled unconditionally; H365 is a separate adult Content source enabled only by the Adult availability preference, and its availability failures do not prevent ordinary Anime365 use. The same preference hides adult AniList-library entries, Timetable entries, and Moments, failing closed when a Moment's adult status cannot be established. Adult-content identity in local telemetry is governed by a separate, privacy-preserving preference so catalogue access and telemetry consent are never conflated.

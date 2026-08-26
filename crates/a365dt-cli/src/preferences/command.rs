@@ -6,7 +6,13 @@ use std::{
 
 use clap::Subcommand;
 
-use crate::{error::Error, ui};
+use crate::{
+	api::{AccessFailure, Anime365},
+	auth,
+	error::Error,
+	telemetry::Recorder,
+	ui,
+};
 
 use super::{
 	FilePreferences, Inspection, Overrides, Preferences, Source, Store,
@@ -18,9 +24,16 @@ enum ConfirmDefault {
 	Yes,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum AdultOptInDecision {
+	Enable,
+	Refuse(Error),
+	ConfirmTransient(Error),
+}
+
 #[derive(Subcommand)]
 pub(crate) enum ConfigCommand {
-	/// Restore built-in Download preferences.
+	/// Restore built-in preferences.
 	Reset {
 		/// Reset without asking for confirmation.
 		#[arg(short, long, conflicts_with = "query")]
@@ -35,7 +48,7 @@ pub(crate) enum ConfigCommand {
 		query: Vec<String>,
 	},
 
-	/// Show effective Download preferences.
+	/// Show effective preferences.
 	Show {
 		#[arg(value_name = "QUERY", num_args = 0.., hide = true)]
 		query: Vec<String>,
@@ -62,7 +75,7 @@ impl Source {
 }
 
 impl Store {
-	pub(crate) fn configure(&self) -> Result<(), Error> {
+	pub(crate) async fn configure(&self) -> Result<(), Error> {
 		if !ui::selector::interactive_terminal() {
 			return Err(Error::new(format!(
 				"Interactive configuration requires a terminal. Edit {} directly.",
@@ -87,7 +100,7 @@ impl Store {
 			Inspection::Unreadable { error, .. } => return Err(error),
 		};
 
-		ui::heading("Download preferences");
+		ui::heading("Preferences");
 		let output = self.prompt_output(&current.output)?;
 		let jobs = prompt_jobs(current.jobs)?;
 		let mux = confirm(
@@ -98,7 +111,25 @@ impl Store {
 				ConfirmDefault::No
 			},
 		)?;
-		self.save(&Preferences { output, jobs, mux })?;
+		let adult =
+			confirm("Enable adult content?", confirm_default(current.adult))?;
+		let adult = validate_adult_opt_in(adult, current.adult).await?;
+		let adult_telemetry = confirm(
+			"Store adult Series identities in local telemetry?",
+			confirm_default(current.adult_telemetry),
+		)?;
+		let auto_play_next_episode = confirm(
+			"Automatically play the next Episode after natural playback completion?",
+			confirm_default(current.auto_play_next_episode),
+		)?;
+		self.save(&Preferences {
+			output,
+			jobs,
+			mux,
+			adult,
+			adult_telemetry,
+			auto_play_next_episode,
+		})?;
 		ui::success(format!("Saved {}", self.file().display()));
 		Ok(())
 	}
@@ -112,7 +143,7 @@ impl Store {
 			Inspection::Invalid { error, .. }
 			| Inspection::Unreadable { error, .. } => return Err(error),
 		};
-		ui::heading("Download preferences");
+		ui::heading("Preferences");
 		ui::grid(&[
 			["Config".into(), path.display().to_string(), state.into()],
 			[
@@ -135,6 +166,22 @@ impl Store {
 				.into(),
 				snapshot.sources.mux.label().into(),
 			],
+			[
+				"Adult content".into(),
+				enabled_label(snapshot.preferences.adult).into(),
+				snapshot.sources.adult.label().into(),
+			],
+			[
+				"Adult telemetry detail".into(),
+				enabled_label(snapshot.preferences.adult_telemetry).into(),
+				snapshot.sources.adult_telemetry.label().into(),
+			],
+			[
+				"Automatic next Episode".into(),
+				enabled_label(snapshot.preferences.auto_play_next_episode)
+					.into(),
+				snapshot.sources.auto_play_next_episode.label().into(),
+			],
 		]);
 		Ok(())
 	}
@@ -151,14 +198,13 @@ impl Store {
 			)
 		})?;
 		if !exists {
-			ui::note("Built-in Download preferences are already active.");
+			ui::note("Built-in preferences are already active.");
 			return Ok(());
 		}
 		let confirmed = match permission {
-			ResetPermission::Ask => confirm(
-				"Remove saved Download preferences?",
-				ConfirmDefault::No,
-			)?,
+			ResetPermission::Ask => {
+				confirm("Remove saved preferences?", ConfirmDefault::No)?
+			}
 			ResetPermission::Preauthorized => true,
 		};
 		if !confirmed {
@@ -166,7 +212,7 @@ impl Store {
 			return Ok(());
 		}
 		self.reset()?;
-		ui::success("Built-in Download preferences restored");
+		ui::success("Built-in preferences restored");
 		Ok(())
 	}
 
@@ -219,8 +265,69 @@ impl Store {
 	}
 }
 
+async fn validate_adult_opt_in(
+	requested: bool,
+	currently_enabled: bool,
+) -> Result<bool, Error> {
+	if !requested || currently_enabled {
+		return Ok(requested);
+	}
+	let access_token = auth::access_token()?;
+	let h365 =
+		Anime365::h365(access_token.value().to_owned(), Recorder::default())?;
+	ui::note("Checking H365 availability before enabling adult content…");
+	match adult_opt_in_decision(h365.validate_access().await) {
+		AdultOptInDecision::Enable => {
+			auth::store_if_requested(&access_token)?;
+			Ok(true)
+		}
+		AdultOptInDecision::Refuse(error) => {
+			Err(error.context("Adult content was not enabled"))
+		}
+		AdultOptInDecision::ConfirmTransient(error) => {
+			ui::warning(error);
+			let accepted = confirm(
+				"H365 is temporarily unavailable. Enable adult content anyway?",
+				ConfirmDefault::No,
+			)?;
+			if accepted {
+				auth::store_if_requested(&access_token)?;
+			}
+			Ok(accepted)
+		}
+	}
+}
+
+fn adult_opt_in_decision(
+	access: std::result::Result<(), AccessFailure>,
+) -> AdultOptInDecision {
+	match access {
+		Ok(()) => AdultOptInDecision::Enable,
+		Err(AccessFailure::Denied(error)) => AdultOptInDecision::Refuse(error),
+		Err(AccessFailure::Unavailable(error)) => {
+			AdultOptInDecision::ConfirmTransient(error)
+		}
+	}
+}
+
 fn confirm(label: &str, default: ConfirmDefault) -> Result<bool, Error> {
 	ui::confirm(label, matches!(default, ConfirmDefault::Yes))
+}
+
+fn confirm_default(value: bool) -> ConfirmDefault {
+	if value {
+		ConfirmDefault::Yes
+	} else {
+		ConfirmDefault::No
+	}
+}
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod tests;
+
+fn enabled_label(value: bool) -> &'static str {
+	if value { "Enabled" } else { "Disabled" }
 }
 
 fn prompt_jobs(current: NonZeroUsize) -> Result<NonZeroUsize, Error> {

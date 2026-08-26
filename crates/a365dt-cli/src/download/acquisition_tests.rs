@@ -157,7 +157,7 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
 	fn new() -> Self {
 		let unique = format!(
-			"a365dt-test-{}-{}-{:?}",
+			"a365-test-{}-{}-{:?}",
 			std::process::id(),
 			SystemTime::now()
 				.duration_since(UNIX_EPOCH)
@@ -329,11 +329,13 @@ fn downloaded(bytes: u64) -> Result<Acquisition, TransferError> {
 fn release() -> PlannedRelease {
 	PlannedRelease {
 		episode: Episode {
+			source: crate::content::ContentSource::Anime365,
 			id: 42,
 			episode_int: "1".into(),
 			episode_full: "1 серия".into(),
 		},
 		translation: Translation {
+			source: crate::content::ContentSource::Anime365,
 			id: 7,
 			episode_id: 42,
 			kind: "voice".into(),

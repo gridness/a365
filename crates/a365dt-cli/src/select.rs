@@ -59,7 +59,7 @@ pub fn choose_episodes(episodes: &[Episode]) -> Result<Vec<Episode>, Error> {
 				comma(plan.missing.iter())
 			));
 			match ui::choose(
-				"How should a365dt proceed?",
+				"How should a365 proceed?",
 				&[
 					["Continue with available episodes".into()],
 					["Enter a different selection".into()],
@@ -91,6 +91,34 @@ pub fn choose_episodes(episodes: &[Episode]) -> Result<Vec<Episode>, Error> {
 		}
 		return Ok(selected);
 	}
+}
+
+pub fn choose_episode(episodes: &[Episode]) -> Result<Episode, Error> {
+	if episodes.is_empty() {
+		return Err("This Series has no Episodes.".into());
+	}
+	let rows = episodes
+		.iter()
+		.map(|episode| [episode.episode_full.clone()])
+		.collect::<Vec<_>>();
+	Ok(episodes[ui::choose("Episodes", &rows)?].clone())
+}
+
+pub fn translation_for_track(
+	translations: &[Translation],
+	episode: &Episode,
+	track: &TrackKey,
+) -> Option<Translation> {
+	translations
+		.iter()
+		.filter(|translation| {
+			translation.episode_id == episode.id
+				&& translation.kind == track.kind
+				&& translation.language == track.language
+				&& translation.authors_summary == track.authors
+		})
+		.max_by_key(|translation| translation.id)
+		.cloned()
 }
 
 pub fn choose_track(

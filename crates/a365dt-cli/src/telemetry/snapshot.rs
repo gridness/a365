@@ -57,6 +57,7 @@ pub(super) async fn capture(store: &Store) -> Result<Snapshot, Error> {
 			 SELECT observed_at_ms FROM command_events UNION ALL \
 			 SELECT observed_at_ms FROM series_selection_events UNION ALL \
 			 SELECT observed_at_ms FROM download_batches UNION ALL \
+			 SELECT observed_at_ms FROM playback_sessions UNION ALL \
 			 SELECT observed_at_ms FROM performance_events\
 			 )",
 		)
@@ -164,6 +165,18 @@ async fn counters(
 	if downloaded > 0 {
 		counters.insert("downloads.bytes".into(), u64_from(bytes)?);
 	}
+	for (outcome, count) in sqlx::query_as::<_, (String, i64)>(
+		"SELECT outcome, COUNT(*) FROM playback_sessions GROUP BY outcome",
+	)
+	.fetch_all(&mut *connection)
+	.await
+	.map_err(read_error)?
+	{
+		counters.insert(
+			format!("playback.outcomes.{}", outcome.replace('_', ".")),
+			u64_from(count)?,
+		);
+	}
 	Ok(counters)
 }
 
@@ -180,11 +193,24 @@ async fn download_samples(
 	.into_iter()
 	.map(|duration| u64_from(duration).map(|duration| duration / 1_000))
 	.collect::<Result<Vec<_>, _>>()?;
-	Ok(if samples.is_empty() {
-		BTreeMap::new()
-	} else {
-		BTreeMap::from([("downloads.batch_duration_ms".into(), samples)])
-	})
+	let mut result = BTreeMap::new();
+	if !samples.is_empty() {
+		result.insert("downloads.batch_duration_ms".into(), samples);
+	}
+	let playback = sqlx::query_scalar::<_, i64>(
+		"SELECT duration_us FROM playback_sessions \
+		 ORDER BY observed_at_ms DESC, id DESC LIMIT 101",
+	)
+	.fetch_all(&mut *connection)
+	.await
+	.map_err(read_error)?
+	.into_iter()
+	.map(|duration| u64_from(duration).map(|duration| duration / 1_000))
+	.collect::<Result<Vec<_>, _>>()?;
+	if !playback.is_empty() {
+		result.insert("playback.duration_ms".into(), playback);
+	}
+	Ok(result)
 }
 
 async fn performance(
