@@ -1,5 +1,6 @@
 use std::{
 	collections::{BTreeMap, HashMap, HashSet},
+	sync::Arc,
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +27,7 @@ pub(crate) struct Catalogue {
 	pub(super) series: Vec<Series>,
 	pub(super) aliases: BTreeMap<String, SeriesKey>,
 	started_with: HashSet<SeriesKey>,
-	index: Option<Index>,
+	index: Option<Arc<Index>>,
 }
 
 impl Clone for Catalogue {
@@ -36,7 +37,7 @@ impl Clone for Catalogue {
 			series: self.series.clone(),
 			aliases: self.aliases.clone(),
 			started_with: self.started_with.clone(),
-			index: None,
+			index: self.index.clone(),
 		}
 	}
 }
@@ -104,10 +105,6 @@ impl Catalogue {
 		self.series.is_empty()
 	}
 
-	pub(crate) fn all_series(&self) -> &[Series] {
-		&self.series
-	}
-
 	pub fn retain_sources(&mut self, sources: &HashSet<ContentSource>) {
 		self.refreshed_at
 			.retain(|source, _| sources.contains(source));
@@ -163,22 +160,58 @@ impl Catalogue {
 		server_matches: &[SeriesKey],
 		telemetry: &Recorder,
 	) -> Suggestions<'a> {
+		self.suggestions_to(query, server_matches, telemetry, None)
+	}
+
+	pub(crate) fn limited_suggestions<'a>(
+		&'a mut self,
+		query: &str,
+		server_matches: &[SeriesKey],
+		telemetry: &Recorder,
+		limit: usize,
+	) -> Suggestions<'a> {
+		self.suggestions_to(query, server_matches, telemetry, Some(limit))
+	}
+
+	fn suggestions_to<'a>(
+		&'a mut self,
+		query: &str,
+		server_matches: &[SeriesKey],
+		telemetry: &Recorder,
+		limit: Option<usize>,
+	) -> Suggestions<'a> {
 		let preferred = self.preferred_rows(query, server_matches);
 		self.ensure_index(telemetry);
 		let index = self.index.as_ref().expect("catalogue index exists");
 		let _measurement =
 			telemetry.measure_items(Operation::SearchRank, index.search.len());
+		let ranked = limit.map_or_else(
+			|| index.search.ranked(query),
+			|limit| {
+				index
+					.search
+					.ranked_limit(query, limit.saturating_add(preferred.len()))
+			},
+		);
 		let mut seen = HashSet::new();
-		let matches = preferred
-			.into_iter()
-			.chain(index.search.ranked(query))
-			.filter(|index| seen.insert(*index))
-			.collect();
+		let mut matches = Vec::new();
+		for row in preferred.into_iter().chain(ranked) {
+			if seen.insert(row) {
+				matches.push(row);
+				if limit.is_some_and(|limit| matches.len() == limit) {
+					break;
+				}
+			}
+		}
 		Suggestions {
 			series: &self.series,
 			rows: &index.rows,
 			matches,
 		}
+	}
+
+	pub(crate) fn prepare_search(&mut self, telemetry: &Recorder) {
+		self.ensure_index(telemetry);
 	}
 
 	pub fn ranked(
@@ -302,7 +335,7 @@ impl Catalogue {
 			telemetry.measure_items(Operation::SearchIndex, rows.len());
 		let search = Search::new(&rows);
 		drop(measurement);
-		self.index = Some(Index { rows, search });
+		self.index = Some(Arc::new(Index { rows, search }));
 	}
 
 	fn ids(&self) -> HashSet<SeriesKey> {

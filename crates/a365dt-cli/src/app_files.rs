@@ -367,7 +367,8 @@ fn application_file_disposition(path: &Path) -> Option<LegacyFileDisposition> {
 		| "telemetry.sqlite-wal"
 		| "telemetry.sqlite-shm"
 		| "telemetry.json"
-		| "telemetry-disabled" => Some(LegacyFileDisposition::Data),
+		| "telemetry-disabled"
+		| "continue-watching.json" => Some(LegacyFileDisposition::Data),
 		"cache.lock"
 		| "cache-initialization.lock"
 		| "telemetry.lock"

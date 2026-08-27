@@ -7,7 +7,7 @@ use std::{
 	time::{Duration, SystemTime},
 };
 
-use console::{Style, style};
+use console::{Style, strip_ansi_codes, style};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use semver::Version;
 
@@ -23,18 +23,29 @@ const LATEST_RELEASE_URL: &str =
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECK_FAILURE: &str = "Could not check for updates.";
 
-pub async fn show(store: &Store) {
-	if !io::stdout().is_terminal() {
-		return;
-	}
+#[derive(Default)]
+pub(crate) struct Notices {
+	update: Option<Update>,
+	tip: Option<&'static str>,
+}
 
-	let update = cached_update(store).await;
+pub(crate) async fn load(store: &Store) -> Notices {
+	if !io::stdout().is_terminal() {
+		return Notices::default();
+	}
+	Notices {
+		update: cached_update(store).await,
+		tip: random_tip(),
+	}
+}
+
+pub(crate) fn show(notices: &Notices) {
 	println!();
-	if let Some(update) = update {
-		show_update(&update);
+	if let Some(update) = &notices.update {
+		show_update(update);
 		println!();
 	}
-	if let Some(tip) = random_tip() {
+	if let Some(tip) = notices.tip {
 		println!("{}: {}", style("Tip").bold(), render_markdown(tip));
 		println!();
 	}
@@ -246,6 +257,22 @@ fn random_tip() -> Option<&'static str> {
 	let index =
 		RandomState::new().hash_one((now, process::id())) as usize % tips.len();
 	Some(tips[index])
+}
+
+impl Notices {
+	pub(crate) fn plain_tip(&self) -> Option<String> {
+		self.tip
+			.map(|tip| strip_ansi_codes(&render_markdown(tip)).into_owned())
+	}
+
+	pub(crate) fn tui_update_notice(&self) -> Option<String> {
+		self.update.as_ref().map(|update| {
+			format!(
+				"💫 Upgrade available · v{} → v{} · run `a365 update` for instructions",
+				update.installed, update.available,
+			)
+		})
+	}
 }
 
 fn render_markdown(markdown: &str) -> String {

@@ -425,6 +425,7 @@ jobs:
         run: |
           ruby -c tap/Formula/a365.rb
           brew tap Gridness/oosama "$PWD/tap"
+          brew install --cask iina
           brew install Gridness/oosama/a365
           brew test Gridness/oosama/a365
 

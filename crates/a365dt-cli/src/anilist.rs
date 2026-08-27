@@ -9,8 +9,10 @@ use crate::{error::Error, preferences, ui};
 mod credentials;
 mod oauth;
 mod timetable;
+mod trending;
 
 pub(crate) use timetable::{ScheduleEntry, current_week};
+pub(crate) use trending::{TrendingSeries, trending_series};
 
 const GRAPHQL_ENDPOINT: &str = "https://graphql.anilist.co";
 
@@ -336,6 +338,17 @@ async fn login() -> Result<(), Error> {
 		));
 	}
 	Ok(())
+}
+
+pub(crate) async fn connect_library(
+	adult: preferences::AdultContent,
+) -> Result<(Viewer, Library), Error> {
+	let grant = oauth::login_in_tui().await?;
+	let client = Client::authenticated(grant.token.clone())?;
+	let viewer = client.viewer().await?;
+	let library = client.library(viewer.id, adult).await?;
+	credentials::store(&grant.token)?;
+	Ok((viewer, library))
 }
 
 async fn status() -> Result<(), Error> {

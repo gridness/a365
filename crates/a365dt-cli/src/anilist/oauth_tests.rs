@@ -131,7 +131,7 @@ async fn pending_login_times_out_with_an_actionable_retry() {
 	assert_eq!(
 		error,
 		crate::error::Error::new(
-			"AniList login timed out after five minutes. Run `a365 anilist login` and try again.",
+			"AniList login timed out after five minutes. Retry from the AniList tab.",
 		),
 	);
 }

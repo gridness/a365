@@ -88,6 +88,43 @@ fn parses_official_series_fixture() {
 }
 
 #[test]
+fn parses_current_numeric_episode_schema() {
+	let actual: Envelope<Vec<Series>> = serde_json::from_str(
+		r#"{"data":[{"id":30887,"title":"ROAD OF NARUTO","year":2022,"typeTitle":"ONA","numberOfEpisodes":2,"myAnimeListId":53236,"anilistId":166946,"episodes":[{"id":292232,"episodeInt":1,"episodeFull":"ONA 1"},{"id":292233,"episodeInt":1.5,"episodeFull":"ONA 1.5"}]}]}"#,
+	)
+	.unwrap();
+
+	assert_eq!(
+		actual.data.unwrap(),
+		vec![Series {
+			source: ContentSource::Anime365,
+			id: 30887,
+			title: "ROAD OF NARUTO".into(),
+			year: Some(2022),
+			type_title: Some("ONA".into()),
+			number_of_episodes: Some(2),
+			my_anime_list_id: Some(53_236),
+			anilist_id: Some(166_946),
+			poster_url_small: None,
+			episodes: vec![
+				Episode {
+					source: ContentSource::Anime365,
+					id: 292232,
+					episode_int: "1".into(),
+					episode_full: "ONA 1".into(),
+				},
+				Episode {
+					source: ContentSource::Anime365,
+					id: 292233,
+					episode_int: "1.5".into(),
+					episode_full: "ONA 1.5".into(),
+				},
+			],
+		}],
+	);
+}
+
+#[test]
 fn parses_source_qualified_h365_catalogue_and_series_fixtures() {
 	let fixture = r#"{"data":[{"id":7,"title":"H365 title","year":2026,"typeTitle":"ONA","numberOfEpisodes":2,"myAnimeListId":null,"anilistId":null,"episodes":[{"id":70,"episodeInt":"1","episodeFull":"Episode 1"}]}]}"#;
 	let client =

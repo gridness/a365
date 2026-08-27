@@ -8,7 +8,7 @@ use super::{
 	Args, CacheCommand, Commands, ConfigCommand, MediaAction, TelemetryCommand,
 	cancel_download,
 	command_line::{OwnerRoute, owner_route, route_title_query},
-	media_action,
+	media_action, opens_tui,
 };
 use crate::interactive::{self, Anime365Access};
 
@@ -48,6 +48,28 @@ fn routes_interrupts_to_active_downloads() {
 			*cancellation.borrow_and_update(),
 		),
 		(true, true)
+	);
+}
+
+#[test]
+fn only_interactive_playback_routes_open_the_tui() {
+	let opens = |arguments: &[&str]| {
+		let mut args = Args::try_parse_from(arguments).unwrap();
+		route_title_query(&mut args);
+		opens_tui(&args)
+	};
+
+	assert_eq!(
+		[
+			opens(&["a365"]),
+			opens(&["a365", "Frieren"]),
+			opens(&["a365", "profile"]),
+			opens(&["a365", "anilist", "list"]),
+			opens(&["a365", "anilist", "status"]),
+			opens(&["a365", "update"]),
+			opens(&["a365", "Frieren", "--download"]),
+		],
+		[true, true, true, true, false, false, false],
 	);
 }
 

@@ -3,6 +3,21 @@
 
 # a365 terminal application formula populated by the release workflow.
 class A365 < Formula
+  # Validates the native macOS Player installed by Homebrew Cask.
+  class IinaRequirement < Requirement
+    fatal true
+    cask "iina"
+
+    satisfy(build_env: false) do
+      File.exist?("/Applications/IINA.app") ||
+        File.exist?(File.expand_path("~/Applications/IINA.app"))
+    end
+
+    def message
+      "IINA is required by a365 on macOS. Install it with:\n  brew install --cask iina"
+    end
+  end
+
   desc "Browse, play, and download from Anime365 in the terminal"
   homepage "https://github.com/@REPOSITORY@"
   version "@VERSION@"
@@ -10,6 +25,8 @@ class A365 < Formula
   depends_on "ffmpeg-full" => :optional
   on_macos do
     depends_on arch: :arm64
+    depends_on IinaRequirement
+
     on_arm do
       url "https://github.com/@REPOSITORY@/releases/download/v@VERSION@/a365-v@VERSION@-aarch64-apple-darwin.tar.gz"
       sha256 "@MACOS_ARM64_SHA256@"

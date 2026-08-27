@@ -1,32 +1,19 @@
+use std::collections::HashSet;
+
 use crate::{
 	anilist::{ListStatus, ScheduleEntry},
+	api::Series,
 	community::{Moment, MomentCategory, MomentPage},
+	telemetry::Recorder,
 };
 
-use super::{
-	AniListView, Data, Destination, Item, ItemAction, Launch, SeriesView,
-	Surface,
-};
-
-pub(super) fn home_items(data: &Data) -> Vec<Item> {
-	let mut items = Vec::new();
-	if let Surface::Ready(schedule) = &data.timetable {
-		items.extend(schedule.iter().take(5).map(schedule_item));
-	}
-	if let Surface::Ready(moments) = &data.moments {
-		items.extend(moments.moments.iter().take(5).map(moment_item));
-	}
-	items.push(Item {
-		label: "Search Anime365 and H365".into(),
-		detail: "Open Series search".into(),
-		action: ItemAction::Destination(Destination::Search),
-	});
-	items
-}
+use super::{AniListView, Item, ItemAction, Launch, SeriesView, Surface};
 
 pub(super) fn search_items(
-	surface: &Surface<SeriesView>,
+	surface: &mut Surface<SeriesView>,
 	query: &str,
+	remote: Option<(&[Series], Option<&str>)>,
+	telemetry: &Recorder,
 ) -> Vec<Item> {
 	let Surface::Ready(view) = surface else {
 		return Vec::new();
@@ -43,36 +30,68 @@ pub(super) fn search_items(
 			action: ItemAction::None,
 		})
 		.collect::<Vec<_>>();
-	let words = query
-		.to_lowercase()
-		.split_whitespace()
-		.map(str::to_owned)
-		.collect::<Vec<_>>();
-	items.extend(
-		view.series
-			.iter()
-			.filter(|series| {
-				let title = series.title.to_lowercase();
-				words.iter().all(|word| title.contains(word))
-			})
-			.take(200)
-			.map(|series| Item {
-				label: series.title.clone(),
-				detail: format!(
-					"{} · {} · {} episodes",
-					series.source,
-					series
-						.year
-						.map_or_else(|| "—".into(), |year| year.to_string()),
-					series
-						.number_of_episodes
-						.map_or_else(|| "—".into(), |count| count.to_string()),
-				),
-				action: ItemAction::Launch(Launch::Series(series.key())),
-			})
-			.collect::<Vec<_>>(),
+	if let Some((_, Some(error))) = remote {
+		items.push(Item {
+			label: "Remote search unavailable".into(),
+			detail: error.into(),
+			action: ItemAction::None,
+		});
+	}
+	if query.trim().is_empty() {
+		return items;
+	}
+	let remote = remote.map(|(series, _)| series).unwrap_or_default();
+	let remote_keys = remote.iter().map(Series::key).collect::<Vec<_>>();
+	let mut seen = HashSet::new();
+	let mut content = 0;
+	for series in remote {
+		if content == 200 {
+			break;
+		}
+		if seen.insert(series.key()) {
+			items.push(series_item(series));
+			content += 1;
+		}
+	}
+	let suggestions = view.catalogue.limited_suggestions(
+		query,
+		&remote_keys,
+		telemetry,
+		200_usize.saturating_sub(content),
 	);
+	for position in 0.. {
+		if content == 200 {
+			break;
+		}
+		let Some(series) = suggestions.series(position) else {
+			break;
+		};
+		if seen.insert(series.key()) {
+			items.push(series_item(series));
+			content += 1;
+		}
+	}
 	items
+}
+
+fn series_item(series: &Series) -> Item {
+	Item {
+		label: series.title.clone(),
+		detail: format!(
+			"{} · {} · {} episodes",
+			series.source,
+			series
+				.year
+				.map_or_else(|| "—".into(), |year| year.to_string()),
+			series
+				.number_of_episodes
+				.map_or_else(|| "—".into(), |count| count.to_string()),
+		),
+		action: ItemAction::OpenSeries {
+			launch: Launch::Series(series.key()),
+			title: series.title.clone(),
+		},
+	}
 }
 
 pub(super) fn timetable_items(
@@ -92,11 +111,14 @@ fn schedule_item(entry: &ScheduleEntry) -> Item {
 			entry.episode,
 			schedule_time(entry.airing_at)
 		),
-		action: ItemAction::Launch(Launch::ExternalSeries {
-			my_anime_list_id: entry.mal_id,
-			anilist_id: entry.media_id,
+		action: ItemAction::OpenSeries {
+			launch: Launch::ExternalSeries {
+				my_anime_list_id: entry.mal_id,
+				anilist_id: entry.media_id,
+				title: entry.title.display().to_owned(),
+			},
 			title: entry.title.display().to_owned(),
-		}),
+		},
 	}
 }
 
@@ -139,7 +161,7 @@ pub(super) fn moment_items(
 	items
 }
 
-fn moment_item(moment: &Moment) -> Item {
+pub(super) fn moment_item(moment: &Moment) -> Item {
 	let mut detail = [
 		(!moment.duration.is_empty()).then_some(moment.duration.as_str()),
 		moment.episode.as_deref(),
@@ -157,42 +179,43 @@ fn moment_item(moment: &Moment) -> Item {
 	Item {
 		label: moment.title.clone(),
 		detail: detail.join(" · "),
-		action: ItemAction::Launch(Launch::Moment {
+		action: ItemAction::Moment {
 			id: moment.id,
 			title: moment.title.clone(),
-		}),
+		},
 	}
 }
 
-pub(super) fn anilist_items(
-	surface: &Surface<AniListView>,
-	query: &str,
-) -> Vec<Item> {
-	let Surface::Ready(view) = surface else {
-		return Vec::new();
+pub(super) fn anilist_items(surface: &Surface<AniListView>) -> Vec<Item> {
+	let view = match surface {
+		Surface::Ready(view) => view,
+		Surface::Empty => {
+			return vec![Item {
+				label: "Connect AniList".into(),
+				detail: "Open browser authorization".into(),
+				action: ItemAction::ConnectAniList,
+			}];
+		}
+		Surface::Error(error) => {
+			return vec![Item {
+				label: "Retry AniList connection".into(),
+				detail: error.clone(),
+				action: ItemAction::ConnectAniList,
+			}];
+		}
+		Surface::Loading => return Vec::new(),
 	};
-	let words = query
-		.to_lowercase()
-		.split_whitespace()
-		.map(str::to_owned)
-		.collect::<Vec<_>>();
 	view.library
 		.lists
 		.iter()
 		.flat_map(|list| {
-			list.entries.iter().filter_map(|entry| {
+			list.entries.iter().map(|entry| {
 				let status = entry.status.map_or("Unlisted", ListStatus::name);
 				let group = if list.is_custom_list {
 					format!("{} (custom)", list.name)
 				} else {
 					list.name.clone()
 				};
-				let searchable =
-					format!("{} {group} {status}", entry.media.title.display())
-						.to_lowercase();
-				if !words.iter().all(|word| searchable.contains(word)) {
-					return None;
-				}
 				let next =
 					entry.media.next_airing_episode.as_ref().map_or_else(
 						|| "no next airing".into(),
@@ -204,18 +227,21 @@ pub(super) fn anilist_items(
 							)
 						},
 					);
-				Some(Item {
+				Item {
 					label: entry.media.title.display().to_owned(),
 					detail: format!(
 						"{group} · {status} · progress {} · score {:.0} · priority {} · {next}",
 						entry.progress, entry.score, entry.priority,
 					),
-					action: ItemAction::Launch(Launch::ExternalSeries {
-						my_anime_list_id: entry.media.id_mal,
-						anilist_id: entry.media.id,
+					action: ItemAction::OpenSeries {
+						launch: Launch::ExternalSeries {
+							my_anime_list_id: entry.media.id_mal,
+							anilist_id: entry.media.id,
+							title: entry.media.title.display().to_owned(),
+						},
 						title: entry.media.title.display().to_owned(),
-					}),
-				})
+					},
+				}
 			})
 		})
 		.collect()

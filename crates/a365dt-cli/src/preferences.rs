@@ -44,7 +44,7 @@ impl Preferences {
 	}
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Overrides {
 	pub output: Option<PathBuf>,
 	pub jobs: Option<NonZeroUsize>,
@@ -82,6 +82,7 @@ pub(crate) enum Inspection {
 	Unreadable { path: PathBuf, error: Error },
 }
 
+#[derive(Clone)]
 pub(crate) struct Store {
 	application_home: PathBuf,
 	home: PathBuf,
@@ -194,6 +195,14 @@ impl Store {
 		Ok(output)
 	}
 
+	pub(crate) fn prepare_configured_output(
+		&self,
+		output: &str,
+	) -> Result<PathBuf, Error> {
+		let output = self.resolve_configured_output(output.to_owned())?;
+		self.prepare_output(&output)
+	}
+
 	fn resolve(
 		&self,
 		file: FilePreferences,
@@ -279,7 +288,7 @@ impl Store {
 		}
 	}
 
-	fn save(&self, preferences: &Preferences) -> Result<(), Error> {
+	pub(crate) fn save(&self, preferences: &Preferences) -> Result<(), Error> {
 		let path = self.file();
 		let output = preferences.output.to_str().ok_or_else(|| {
 			Error::new("The output directory cannot be encoded in TOML.")

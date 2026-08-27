@@ -36,6 +36,15 @@ static ROWS: LazyLock<Vec<[String; 4]>> = LazyLock::new(|| {
 });
 static CATALOGUE: LazyLock<Search> =
 	LazyLock::new(|| Search::new(ROWS.as_slice()));
+static EPISODE_ROWS: LazyLock<Vec<[String; 2]>> = LazyLock::new(|| {
+	(1..=10_000)
+		.map(|episode| {
+			[format!("Episode {episode}"), "Select Translation".into()]
+		})
+		.collect()
+});
+static EPISODES: LazyLock<Search> =
+	LazyLock::new(|| Search::new(EPISODE_ROWS.as_slice()));
 static PERFORMANCE: LazyLock<Mutex<Performance>> =
 	LazyLock::new(Mutex::default);
 
@@ -44,6 +53,7 @@ fn main() {
 }
 
 #[divan::bench(args = [
+	"s",
 	"steins gate",
 	"stiens gate",
 	"gate steins",
@@ -55,6 +65,43 @@ fn filter_catalogue(query: &str) -> Vec<usize> {
 }
 
 #[divan::bench(args = [
+	"s",
+	"steins gate",
+	"stiens gate",
+	"gate steins",
+	"definitely absent",
+])]
+fn filter_catalogue_like_broken_v3_tui(query: &str) -> Vec<usize> {
+	let words = divan::black_box(query)
+		.to_lowercase()
+		.split_whitespace()
+		.map(str::to_owned)
+		.collect::<Vec<_>>();
+	ROWS.iter()
+		.enumerate()
+		.filter(|(_, row)| {
+			let title = row[0].to_lowercase();
+			words.iter().all(|word| title.contains(word))
+		})
+		.take(200)
+		.map(|(index, _)| index)
+		.collect()
+}
+
+#[divan::bench(args = [
+	"s",
+	"steins gate",
+	"stiens gate",
+	"gate steins",
+	"definitely absent",
+])]
+fn filter_catalogue_for_tui(query: &str) -> Vec<usize> {
+	divan::black_box(CATALOGUE.len());
+	CATALOGUE.ranked_limit(divan::black_box(query), 200)
+}
+
+#[divan::bench(args = [
+	"s",
 	"steins gate",
 	"stiens gate",
 	"gate steins",
@@ -74,4 +121,15 @@ fn filter_catalogue_with_telemetry(query: &str) -> Vec<usize> {
 #[divan::bench]
 fn index_catalogue() -> Search {
 	Search::new(divan::black_box(ROWS.as_slice()))
+}
+
+#[divan::bench(args = ["1", "5000", "episode 9999", "absent"])]
+fn filter_episode_choices(query: &str) -> Vec<usize> {
+	divan::black_box(EPISODES.len());
+	EPISODES.ranked(divan::black_box(query))
+}
+
+#[divan::bench]
+fn index_episode_choices() -> Search {
+	Search::new(divan::black_box(EPISODE_ROWS.as_slice()))
 }

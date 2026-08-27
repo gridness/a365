@@ -25,7 +25,7 @@ use crate::{
 
 const REFRESH_CONCURRENCY: usize = 4;
 const MAX_CATALOGUE_SIZE: usize = 100_000;
-const SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
+pub(crate) const SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
 const SEARCH_LABEL: &str = "Search title or paste Anime365 URL";
 
 pub struct Selection {
@@ -442,10 +442,10 @@ enum Update {
 	RefreshFailed(ContentSource, Error),
 }
 
-struct RemoteResults {
-	exact: Vec<Series>,
-	fallback: Vec<Series>,
-	warnings: Vec<Error>,
+pub(crate) struct RemoteResults {
+	pub(crate) exact: Vec<Series>,
+	pub(crate) fallback: Vec<Series>,
+	pub(crate) warnings: Vec<Error>,
 }
 
 fn schedule_search(
@@ -469,11 +469,18 @@ fn schedule_search(
 	}))
 }
 
-async fn remote_search(
+pub(crate) async fn remote_search(
 	apis: &[Anime365],
 	query: &str,
 	telemetry: &Recorder,
 ) -> ApiResult<RemoteResults> {
+	if series_key_from_url(query).is_some() {
+		return Ok(RemoteResults {
+			exact: vec![load_url(apis, query).await?],
+			fallback: Vec::new(),
+			warnings: Vec::new(),
+		});
+	}
 	let mut exact = Vec::new();
 	let mut fallback = Vec::new();
 	let mut warnings = Vec::new();
@@ -537,7 +544,12 @@ async fn remote_search_source(
 async fn refresh(apis: Vec<Anime365>, updates: mpsc::UnboundedSender<Update>) {
 	for api in apis {
 		let source = api.source();
-		match refresh_source(api, updates.clone()).await {
+		let page_updates = updates.clone();
+		match refresh_source(api, move |offset, page| {
+			let _ = page_updates.send(Update::Page(offset, page.to_vec()));
+		})
+		.await
+		{
 			Ok(series) => {
 				let _ = updates.send(Update::Refreshed(source, series));
 			}
@@ -548,9 +560,9 @@ async fn refresh(apis: Vec<Anime365>, updates: mpsc::UnboundedSender<Update>) {
 	}
 }
 
-async fn refresh_source(
+pub(crate) async fn refresh_source(
 	api: Anime365,
-	updates: mpsc::UnboundedSender<Update>,
+	on_page: impl Fn(usize, &[Series]),
 ) -> ApiResult<Vec<Series>> {
 	let mut active = JoinSet::new();
 	let mut next_offset = 0;
@@ -569,7 +581,7 @@ async fn refresh_source(
 		})?;
 		let page = page?;
 		let full = page.len() == SERIES_PAGE_SIZE;
-		let _ = updates.send(Update::Page(offset, page.clone()));
+		on_page(offset, &page);
 		pages.insert(offset, page);
 		if full && !reached_end {
 			if next_offset >= MAX_CATALOGUE_SIZE {

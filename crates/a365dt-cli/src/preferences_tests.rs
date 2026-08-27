@@ -98,6 +98,19 @@ fn resolves_home_slash_as_the_home_directory() {
 }
 
 #[test]
+fn prepares_a_tui_configured_output_directory() {
+	let fixture = Fixture::new("tui-output");
+	let expected = fixture.home.join("Anime");
+
+	let actual = fixture
+		.store()
+		.prepare_configured_output("~/Anime")
+		.unwrap();
+
+	assert_eq!(actual, fs::canonicalize(expected).unwrap());
+}
+
+#[test]
 fn saves_loads_and_resets_download_preferences() {
 	let fixture = Fixture::new("lifecycle");
 	let store = fixture.store();

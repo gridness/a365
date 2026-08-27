@@ -1,9 +1,9 @@
 use pretty_assertions::assert_eq;
 
 use super::{
-	Moment, MomentCategory, MomentMedia, ProfileEnrichment, PublicListProgress,
-	PublicListStatus, filter_adult_moments, parse_moment_media, parse_moments,
-	parse_profile,
+	Moment, MomentCategory, MomentMedia, MomentOrdering, ProfileEnrichment,
+	PublicListProgress, PublicListStatus, filter_adult_moments, moments_url,
+	parse_moment_media, parse_moments, parse_profile,
 };
 use crate::preferences::AdultContent;
 
@@ -143,6 +143,24 @@ fn adult_filtering_hides_unclassified_moments() {
 			.map(|moment| moment.id)
 			.collect::<Vec<_>>(),
 		vec![250_103]
+	);
+}
+
+#[test]
+fn trending_moments_request_the_public_popular_ordering() {
+	let category = MomentCategory {
+		label: "AMV".into(),
+		id: "7".into(),
+	};
+	let url = moments_url(2, Some(&category), MomentOrdering::Popular).unwrap();
+
+	assert_eq!(
+		url.query_pairs().collect::<Vec<_>>(),
+		vec![
+			("moments-page".into(), "2".into()),
+			("MomentsFilter[categoryId]".into(), "7".into()),
+			("MomentsFilter[sort]".into(), "popular".into()),
+		],
 	);
 }
 

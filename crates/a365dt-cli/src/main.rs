@@ -6,6 +6,7 @@ mod cache;
 mod command_line;
 mod community;
 mod content;
+mod continue_watching;
 mod doctor;
 mod download;
 mod episode_playback;
@@ -387,9 +388,12 @@ async fn main() -> ExitCode {
 		};
 	}
 	let command = telemetry_command(&args);
+	let detailed_startup = debug || !opens_tui(&args);
 	let (telemetry, telemetry_writer) =
 		telemetry::Writer::open(invocation_id).await;
-	if let Some(error) = telemetry_writer.initialization_warning() {
+	if let Some(error) = telemetry_writer.initialization_warning()
+		&& detailed_startup
+	{
 		ui::warning(error.render(debug));
 	}
 	let active_download = Arc::new(Mutex::new(None));
@@ -429,7 +433,9 @@ async fn main() -> ExitCode {
 		}
 		OwnerRoute::CacheAndTelemetry => {
 			let store = cache::Store::open().await;
-			if let Some(error) = store.initialization_warning() {
+			if let Some(error) = store.initialization_warning()
+				&& detailed_startup
+			{
 				ui::warning(error);
 			}
 			let result = if let Some(Commands::Doctor { .. }) =
@@ -594,6 +600,28 @@ fn media_action(args: &Args) -> Result<MediaAction, Error> {
 		);
 	}
 	Ok(action)
+}
+
+fn opens_tui(args: &Args) -> bool {
+	if args.download {
+		return false;
+	}
+	match args.command.as_ref() {
+		None
+		| Some(Commands::Stream { .. })
+		| Some(Commands::Moments)
+		| Some(Commands::Profile)
+		| Some(Commands::Timetable) => true,
+		Some(Commands::Anilist { command }) => command.opens_tui(),
+		Some(Commands::Cache { .. })
+		| Some(Commands::Completions { .. })
+		| Some(Commands::Config { .. })
+		| Some(Commands::Doctor { .. })
+		| Some(Commands::Purge { .. })
+		| Some(Commands::Stats { .. })
+		| Some(Commands::Telemetry { .. })
+		| Some(Commands::Update { .. }) => false,
+	}
 }
 
 async fn prune_cache(

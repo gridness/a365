@@ -108,14 +108,6 @@ pub(crate) async fn selection(
 					catalogue: CatalogueUse::Hit,
 				});
 			}
-			if !crate::ui::confirm(
-				&format!(
-					"No enabled Series matched the AniList IDs for {title:?}. Search enabled sources by title?"
-				),
-				false,
-			)? {
-				return Err(Error::new("Series selection cancelled."));
-			}
 			for api in apis {
 				let candidates = api.search(&title).await?;
 				let candidate = candidates
@@ -143,11 +135,6 @@ pub(crate) async fn selection(
 				"{title} is not currently available from an enabled Anime365 source."
 			)))
 		}
-		tui::Launch::Moment { .. } => {
-			unreachable!(
-				"Moments are handed directly to the public media player"
-			)
-		}
 	}
 }
 
@@ -161,7 +148,7 @@ pub(crate) async fn play_moment(
 	*active_playback.lock().unwrap() = Some(cancel);
 	let result = playback::play_public(media.url, title, cancellation).await;
 	*active_playback.lock().unwrap() = None;
-	match result? {
+	match result?.outcome {
 		playback::Outcome::Interrupted => Ok(ExitCode::from(130)),
 		playback::Outcome::NaturalEnd | playback::Outcome::Stopped => {
 			Ok(ExitCode::SUCCESS)
