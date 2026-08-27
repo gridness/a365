@@ -408,7 +408,6 @@ jobs:
             -e "s|@LINUX_ARM64_SHA256@|$linux_arm64|g" \
             -e "s|@LINUX_X64_SHA256@|$linux_x64|g" \
             source/packaging/homebrew/a365.rb > tap/Formula/a365.rb
-          rm -f tap/Formula/a365dt.rb
 
       - name: Prepare formula commit
         run: |
