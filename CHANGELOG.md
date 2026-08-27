@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/gridness/a365/compare/v3.0.0...v3.0.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* repaired the a365 3.0 release ([#119](https://github.com/gridness/a365/issues/119)) ([5cbd3b7](https://github.com/gridness/a365/commit/5cbd3b721f800432be0c4ecf89b8c81e4b63d66b))
+
 ## [3.0.0](https://github.com/gridness/a365/compare/v2.4.0...v3.0.0) (2026-08-26)
 
 
