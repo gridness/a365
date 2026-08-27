@@ -1,6 +1,8 @@
 use pretty_assertions::assert_eq;
 
-use super::{TerminalMode, require_interactive_playback};
+use super::{
+	Presentation, TerminalMode, presentation, require_interactive_playback,
+};
 use crate::MediaAction;
 
 #[test]
@@ -28,5 +30,21 @@ fn noninteractive_playback_fails_before_session_setup() {
 			Ok(()),
 			Ok(()),
 		),
+	);
+}
+
+#[test]
+fn normal_playback_is_quiet_while_debug_and_downloads_stay_detailed() {
+	assert_eq!(
+		[
+			presentation(MediaAction::Playback, false),
+			presentation(MediaAction::Playback, true),
+			presentation(MediaAction::Download, false),
+		],
+		[
+			Presentation::QuietTui,
+			Presentation::Detailed,
+			Presentation::Detailed,
+		],
 	);
 }

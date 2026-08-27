@@ -8,9 +8,9 @@ a365 discovers user-selected Anime365 and H365 releases while keeping episode, t
 The build-specific, user-scoped directory that owns a365's preferences, local cache, and telemetry state: `~/.a365` for release builds and `~/.a365-dev` for development builds. Preferences live in `config.toml`, cache files under `cache/`, and telemetry files under `data/`; downloaded media and OS-managed credentials are outside it.
 _Avoid_: OS application directory, data directory
 
-**Download preferences**:
-User-defined defaults for the output directory, concurrent download count, and whether to mux subtitles without confirmation. Any omitted preference inherits its built-in default; `a365 config` edits all effective values interactively, `config show` displays them, and `config reset` restores built-in defaults. They are stored in the Application home's `config.toml`; explicit Invocation choices take precedence when present, and disabling automatic muxing preserves the existing prompt.
-_Avoid_: Settings, options
+**Preferences**:
+User-defined defaults for the output directory, concurrent download count, subtitle muxing, adult content availability, adult telemetry detail, and automatic Episode continuation. Any omitted preference inherits its built-in default. The TUI Config destination persists edits and applies them to the current Interactive session immediately; `a365 config`, `config show`, and `config reset` remain available for line-oriented use. Preferences are stored in the Application home's `config.toml`; explicit Invocation choices take precedence when present.
+_Avoid_: Invocation flags, remote account settings
 
 **Interactive session**:
 An a365 run in which a person discovers a Series and makes Playback or download choices. Help, version reporting, shell-completion generation, and maintenance commands are not Interactive sessions.
@@ -132,9 +132,25 @@ _Avoid_: Stream, preview
 User consent allowing Playback to move from an Episode that ended naturally to the next whole-number Episode of the same Series when the selected Translation track and resolution remain available. It never continues after a manual stop, Player closure, interruption, playback error, fractional Episode, or Moment.
 _Avoid_: Playlist, unconditional autoplay
 
+**Continue Watching**:
+Local product state that offers the same Episode at its last observed Player position after stopped or interrupted Playback, preserves the previous position after a playback failure, and offers the next available Episode from its beginning after a natural end. It remembers the last Translation and resolution for revalidation, stores position as whole elapsed seconds, and is independent of Telemetry.
+_Avoid_: Playback telemetry, AniList progress, Anime365 profile
+
+**Trending Series**:
+A non-adult AniList trend that maps to a currently playable Series from an enabled Content source.
+_Avoid_: Popular anime, recommendation
+
+**Trending Moment**:
+A non-adult Moment ranked by Anime365's popular ordering.
+_Avoid_: Recent Moment, random Moment
+
 **Player**:
 The external application that receives selected Episode media and any separate Subtitle asset for Playback.
 _Avoid_: Video backend, viewer
+
+**Player handoff**:
+The period in which the full-screen TUI remains rendered with a Playing now state but pauses input while an external Player owns Playback. The current TUI state remains part of the same Interactive session and returns to interaction when the Player exits.
+_Avoid_: Leaving the TUI, ending the Interactive session
 
 **Verified download**:
 Downloaded Episode media that passed its transfer completion checks and was finalized successfully.

@@ -6,6 +6,11 @@ use serde::Deserialize;
 
 use crate::{api::Anime365, error::Error, preferences::AdultContent};
 
+#[path = "community/classification.rs"]
+mod classification;
+
+use classification::classify;
+
 const ORIGIN: &str = "https://smotret-anime.org";
 
 #[derive(Clone)]
@@ -77,6 +82,12 @@ struct MomentSource {
 	urls: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum MomentOrdering {
+	Recent,
+	Popular,
+}
+
 impl CommunityClient {
 	pub(crate) fn new() -> Result<Self, Error> {
 		let http = Client::builder()
@@ -101,21 +112,40 @@ impl CommunityClient {
 		api: &Anime365,
 		adult: AdultContent,
 	) -> Result<MomentPage, Error> {
-		let mut url = Url::parse(ORIGIN)
-			.and_then(|origin| origin.join("/moments/index"))
-			.map_err(|error| {
-				Error::with_debug("Could not construct the Moments URL.", error)
-			})?;
+		self.moments_with_ordering(
+			page,
+			category,
+			api,
+			adult,
+			MomentOrdering::Recent,
+		)
+		.await
+	}
+
+	pub(crate) async fn trending_moments(
+		&self,
+		api: &Anime365,
+	) -> Result<MomentPage, Error> {
+		self.moments_with_ordering(
+			1,
+			None,
+			api,
+			AdultContent::Hidden,
+			MomentOrdering::Popular,
+		)
+		.await
+	}
+
+	async fn moments_with_ordering(
+		&self,
+		page: u32,
+		category: Option<&MomentCategory>,
+		api: &Anime365,
+		adult: AdultContent,
+		ordering: MomentOrdering,
+	) -> Result<MomentPage, Error> {
 		let page = page.max(1);
-		{
-			let mut query = url.query_pairs_mut();
-			if page > 1 {
-				query.append_pair("moments-page", &page.to_string());
-			}
-			if let Some(category) = category {
-				query.append_pair("MomentsFilter[categoryId]", &category.id);
-			}
-		}
+		let url = moments_url(page, category, ordering)?;
 		let html = self.fetch(url).await?;
 		let mut result = parse_moments(&html, page)?;
 		classify(&mut result.moments, api).await;
@@ -168,23 +198,33 @@ impl CommunityClient {
 	}
 }
 
+fn moments_url(
+	page: u32,
+	category: Option<&MomentCategory>,
+	ordering: MomentOrdering,
+) -> Result<Url, Error> {
+	let mut url = Url::parse(ORIGIN)
+		.and_then(|origin| origin.join("/moments/index"))
+		.map_err(|error| {
+			Error::with_debug("Could not construct the Moments URL.", error)
+		})?;
+	let mut query = url.query_pairs_mut();
+	if page > 1 {
+		query.append_pair("moments-page", &page.to_string());
+	}
+	if let Some(category) = category {
+		query.append_pair("MomentsFilter[categoryId]", &category.id);
+	}
+	if matches!(ordering, MomentOrdering::Popular) {
+		query.append_pair("MomentsFilter[sort]", "popular");
+	}
+	drop(query);
+	Ok(url)
+}
+
 fn filter_adult_moments(moments: &mut Vec<Moment>, adult: AdultContent) {
 	if adult == AdultContent::Hidden {
 		moments.retain(|moment| moment.is_adult == Some(false));
-	}
-}
-
-async fn classify(moments: &mut [Moment], api: &Anime365) {
-	for moment in moments {
-		let Some(series_id) = moment.series_id else {
-			continue;
-		};
-		moment.is_adult = match api.series(series_id).await {
-			Ok(Some(series)) => {
-				Some(series.source == crate::content::ContentSource::H365)
-			}
-			Ok(None) | Err(_) => None,
-		};
 	}
 }
 

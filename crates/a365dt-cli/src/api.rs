@@ -9,6 +9,11 @@ use crate::{
 	telemetry::{Operation, Recorder},
 };
 
+mod content;
+mod episode_number;
+
+pub(crate) use content::AdultClassification;
+
 const ANIME365_ASSET_ORIGIN: &str = "https://smotret-anime.org";
 const ANIME365_API: &str = "https://anime365.ru/api";
 const H365_ASSET_ORIGIN: &str = "https://hentai365.ru";
@@ -73,6 +78,7 @@ pub struct Episode {
 	#[serde(default)]
 	pub source: ContentSource,
 	pub id: u64,
+	#[serde(deserialize_with = "episode_number::deserialize")]
 	pub episode_int: String,
 	pub episode_full: String,
 }
@@ -164,6 +170,12 @@ impl Anime365 {
 
 	pub(crate) const fn source(&self) -> ContentSource {
 		self.source
+	}
+
+	pub(crate) fn with_source(&self, source: ContentSource) -> Self {
+		let mut api = self.clone();
+		api.source = source;
+		api
 	}
 
 	pub async fn validate(&self) -> Result<()> {

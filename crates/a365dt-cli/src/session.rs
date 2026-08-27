@@ -15,7 +15,6 @@ use crate::{
 	api::Anime365,
 	auth, cache,
 	download::{self, Job, Status},
-	episode_playback,
 	error::Error,
 	interactive, poster, preferences, select, series_search, startup,
 	telemetry, tui, ui,
@@ -31,14 +30,23 @@ enum TerminalMode {
 	NonInteractive,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Presentation {
+	QuietTui,
+	Detailed,
+}
+
 pub(super) async fn run(
 	args: Args,
 	active_download: Arc<Mutex<Option<watch::Sender<bool>>>>,
 	store: &cache::Store,
 	telemetry: &telemetry::Recorder,
 ) -> Result<ExitCode, Error> {
-	ui::heading("a365  ◆  Anime365 player and downloader");
 	let action = media_action(&args)?;
+	let presentation = presentation(action, args.debug);
+	if presentation == Presentation::Detailed {
+		ui::heading("a365  ◆  Anime365 player and downloader");
+	}
 	let terminal =
 		if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
 			TerminalMode::Interactive
@@ -47,23 +55,32 @@ pub(super) async fn run(
 		};
 	require_interactive_playback(action, terminal)?;
 	let preference_store = preferences::Store::discover()?;
-	let preferences = preference_store.load(preferences::Overrides {
+	let overrides = preferences::Overrides {
 		output: args.output.clone(),
 		jobs: args.jobs,
 		mux: args.mux,
-	})?;
-	preferences::warn_if_high_concurrency(&preferences);
+	};
+	let configured_preferences =
+		preference_store.load(preferences::Overrides::default())?;
+	let preferences = preference_store.load(overrides.clone())?;
+	if presentation == Presentation::Detailed {
+		preferences::warn_if_high_concurrency(&preferences);
+	}
 	if let Some(Commands::Anilist {
 		command: command @ anilist::Command::Login,
 	}) = args.command.as_ref()
 	{
 		anilist::run(command).await?;
 	}
-	startup::show(store).await;
-	let mut apis = if interactive::anime365_access(&args)
+	let notices = startup::load(store).await;
+	if presentation == Presentation::Detailed {
+		startup::show(&notices);
+	}
+	let apis = if interactive::anime365_access(&args)
 		== interactive::Anime365Access::Required
 	{
-		authenticate_content_sources(&preferences, telemetry).await?
+		authenticate_content_sources(&preferences, telemetry, presentation)
+			.await?
 	} else {
 		Vec::new()
 	};
@@ -75,34 +92,35 @@ pub(super) async fn run(
 	} else {
 		args.forced_query.join(" ")
 	};
-	let selected = if action == MediaAction::Playback {
+	if action == MediaAction::Playback {
+		let continue_watching = crate::continue_watching::Store::discover()?;
 		let destination = interactive::destination(&args, &query);
 		let (cancel, cancellation) = watch::channel(false);
-		*active_download.lock().unwrap() = Some(cancel);
-		let launch = tui::run(
-			&apis,
+		*active_download.lock().unwrap() = Some(cancel.clone());
+		let result = tui::run(tui::Request {
+			apis: &apis,
 			store,
-			&preferences,
+			preferences: &preferences,
+			configured_preferences: &configured_preferences,
+			preference_store: &preference_store,
+			overrides,
+			telemetry,
 			destination,
 			query,
-			cancellation,
-		)
+			cancelled: cancellation,
+			session_cancel: cancel,
+			active_playback: Arc::clone(&active_download),
+			continue_watching: &continue_watching,
+			tip: notices.plain_tip(),
+			upgrade: notices.tui_update_notice(),
+			debug: args.debug,
+		})
 		.await;
 		*active_download.lock().unwrap() = None;
-		let Some(launch) = launch? else {
-			return Ok(ExitCode::SUCCESS);
-		};
-		if let tui::Launch::Moment { id, title } = launch {
-			return interactive::play_moment(id, &title, active_download).await;
-		}
-		if launch.needs_content_sources() && apis.is_empty() {
-			apis =
-				authenticate_content_sources(&preferences, telemetry).await?;
-		}
-		interactive::selection(launch, &apis, store).await?
-	} else {
-		series_search::choose(&apis, store, query, telemetry).await?
-	};
+		return result;
+	}
+	let selected =
+		series_search::choose(&apis, store, query, telemetry).await?;
 	let series_recording = series_recording(&selected.series, &preferences);
 	telemetry.record_series(
 		&selected.series,
@@ -122,12 +140,7 @@ pub(super) async fn run(
 		})?;
 	ui::success(format!("Selected {}", series.title));
 	poster::show(&api, &series).await;
-	let episodes = match action {
-		MediaAction::Download => select::choose_episodes(&series.episodes)?,
-		MediaAction::Playback => {
-			vec![select::choose_episode(&series.episodes)?]
-		}
-	};
+	let episodes = select::choose_episodes(&series.episodes)?;
 	let translations = api.translations(series.id).await?;
 	let (track, releases) =
 		select::choose_track(translations.clone(), &episodes)?;
@@ -139,27 +152,6 @@ pub(super) async fn run(
 	ui::note("Loading available media…");
 	let releases = fetch_embeds(&api, releases, preferences.jobs.get()).await?;
 	let planned = select::choose_resolutions(releases)?;
-	if action == MediaAction::Playback {
-		let Some(first) = planned.into_iter().next() else {
-			return Err("No playable Episode was selected.".into());
-		};
-		return episode_playback::run(episode_playback::Request {
-			api,
-			series: &series,
-			translations: &translations,
-			track: &track,
-			first,
-			continuation: if preferences.auto_play_next_episode {
-				episode_playback::Continuation::Enabled
-			} else {
-				episode_playback::Continuation::Disabled
-			},
-			telemetry,
-			series_recording,
-			active_playback: active_download,
-		})
-		.await;
-	}
 	let separate_subtitles = planned
 		.iter()
 		.filter(|release| release.subtitle_url.is_some())
@@ -237,27 +229,49 @@ pub(super) async fn run(
 async fn authenticate_content_sources(
 	preferences: &preferences::Preferences,
 	telemetry: &telemetry::Recorder,
+	presentation: Presentation,
 ) -> Result<Vec<Anime365>, Error> {
-	let access_token = auth::access_token()?;
+	let access_token = match presentation {
+		Presentation::QuietTui => auth::access_token_silently()?,
+		Presentation::Detailed => auth::access_token()?,
+	};
 	let anime365 =
 		Anime365::new(access_token.value().to_owned(), telemetry.clone())?;
-	ui::note("Validating Anime365 access…");
+	if presentation == Presentation::Detailed {
+		ui::note("Validating Anime365 access…");
+	}
 	anime365.validate().await?;
 	let mut apis = vec![anime365];
 	if preferences.adult {
 		let h365 =
 			Anime365::h365(access_token.value().to_owned(), telemetry.clone())?;
-		ui::note("Validating H365 access…");
+		if presentation == Presentation::Detailed {
+			ui::note("Validating H365 access…");
+		}
 		match h365.validate().await {
 			Ok(()) => apis.push(h365),
-			Err(error) => ui::warning(
-				error.context("H365 is unavailable; continuing with Anime365"),
-			),
+			Err(error) => {
+				if presentation == Presentation::Detailed {
+					ui::warning(error.context(
+						"H365 is unavailable; continuing with Anime365",
+					));
+				}
+			}
 		}
 	}
-	ui::success("Authenticated");
+	if presentation == Presentation::Detailed {
+		ui::success("Authenticated");
+	}
 	auth::store_if_requested(&access_token)?;
 	Ok(apis)
+}
+
+const fn presentation(action: MediaAction, debug: bool) -> Presentation {
+	if matches!(action, MediaAction::Playback) && !debug {
+		Presentation::QuietTui
+	} else {
+		Presentation::Detailed
+	}
 }
 
 fn require_interactive_playback(

@@ -1,3 +1,5 @@
+use std::{sync::LazyLock, time::Instant};
+
 use ratatui::{
 	Frame,
 	layout::{Constraint, Direction, Layout, Rect},
@@ -8,8 +10,9 @@ use ratatui::{
 
 use super::state::{App, Destination};
 
-const ACCENT: Color = Color::Rgb(245, 166, 35);
+const ACCENT: Color = Color::Rgb(47, 93, 40);
 const MUTED: Color = Color::Rgb(135, 139, 148);
+static ANIMATION_STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 #[derive(Default)]
 pub(crate) struct HitMap {
@@ -47,15 +50,36 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &mut App) -> HitMap {
 		rows[1]
 	};
 	render_body(frame, body, app, &mut map);
-	let help = if app.destination == Destination::Search {
-		"Type to filter  ·  ↑↓/wheel select  ·  Enter/click open  ·  Tab switch  ·  Esc clear/quit"
-	} else if app.destination == Destination::AniList {
-		"/ filter  ·  ↑↓/wheel select  ·  Enter/click open  ·  Tab switch  ·  Esc clear/quit"
+	let help = if app.playing() {
+		"Playback active in IINA · TUI resumes when IINA closes"
+	} else if !app.browsing() {
+		"Type to search  ·  ↑↓/wheel select  ·  Enter/click open  ·  Esc back  ·  Ctrl-Q quit"
+	} else if app.destination == Destination::Search {
+		"Type to search  ·  ↑↓/wheel select  ·  Enter/click open  ·  Tab switch  ·  Esc clear/quit"
+	} else if app.destination == Destination::Config && app.shows_filter() {
+		"Type a replacement  ·  Enter save  ·  Esc cancel  ·  Ctrl-Q quit"
+	} else if app.destination == Destination::Config {
+		"↑↓/wheel select  ·  Enter/click change  ·  c config  ·  Tab switch  ·  Ctrl-Q quit"
 	} else {
 		"↑↓/wheel select  ·  Enter/click open  ·  ←→/Tab switch  ·  Ctrl-Q quit"
 	};
+	let footer = app.upgrade_notice().map_or_else(
+		|| vec![Line::from(Span::styled(help, Style::default().fg(MUTED)))],
+		|upgrade| {
+			vec![
+				Line::from(Span::styled(
+					upgrade,
+					Style::default()
+						.fg(Color::White)
+						.bg(ACCENT)
+						.add_modifier(Modifier::BOLD),
+				)),
+				Line::from(Span::styled(help, Style::default().fg(MUTED))),
+			]
+		},
+	);
 	frame.render_widget(
-		Paragraph::new(help).style(Style::default().fg(MUTED)),
+		Paragraph::new(footer),
 		*rows.last().expect("the TUI always has a help row"),
 	);
 	map
@@ -69,7 +93,7 @@ fn render_navigation(
 ) {
 	let cells = Layout::default()
 		.direction(Direction::Horizontal)
-		.constraints([Constraint::Ratio(1, 6); 6])
+		.constraints([Constraint::Ratio(1, 7); 7])
 		.split(area);
 	for (destination, cell) in Destination::ALL.into_iter().zip(cells.iter()) {
 		let active_style = Style::default()
@@ -94,11 +118,7 @@ fn render_navigation(
 
 fn render_filter(frame: &mut Frame<'_>, area: Rect, app: &App) {
 	let query = app.filter_value();
-	let placeholder = if app.destination == Destination::AniList {
-		"Press / to filter title, list, or status…"
-	} else {
-		"Search title…"
-	};
+	let placeholder = app.filter_placeholder();
 	let value = if query.is_empty() {
 		Line::from(Span::styled(placeholder, Style::default().fg(MUTED)))
 	} else {
@@ -121,6 +141,15 @@ fn render_body(
 	map: &mut HitMap,
 ) {
 	if let Some(profile) = app.profile() {
+		let debug = app.debug();
+		let account_id = if debug {
+			profile
+				.documented
+				.id
+				.map_or_else(String::new, |id| format!(" · ID {id}"))
+		} else {
+			String::new()
+		};
 		let mut lines = vec![
 			Line::from(format!(
 				"Signed in  {}",
@@ -135,10 +164,7 @@ fn render_body(
 				Span::raw(format!(
 					"{}{}",
 					profile.documented.name.as_deref().unwrap_or("Unknown"),
-					profile
-						.documented
-						.id
-						.map_or_else(String::new, |id| format!(" · ID {id}")),
+					account_id,
 				)),
 			]),
 			Line::from(format!(
@@ -160,7 +186,7 @@ fn render_body(
 		];
 		match &profile.enrichment {
 			Ok(enrichment) => {
-				if let Some(avatar) = &enrichment.avatar_url {
+				if debug && let Some(avatar) = &enrichment.avatar_url {
 					lines.push(Line::from(format!("Avatar  {avatar}")));
 				}
 				lines.push(Line::from(format!(
@@ -201,10 +227,17 @@ fn render_body(
 					)));
 				}
 			}
-			Err(error) => lines.push(Line::from(Span::styled(
-				format!("Public profile enrichment unavailable · {error}"),
-				Style::default().fg(MUTED),
-			))),
+			Err(error) => {
+				let detail = if debug {
+					format!(" · {error}")
+				} else {
+					String::new()
+				};
+				lines.push(Line::from(Span::styled(
+					format!("Public profile enrichment unavailable{detail}"),
+					Style::default().fg(MUTED),
+				)));
+			}
 		}
 		frame.render_widget(
 			Paragraph::new(lines)
@@ -215,6 +248,11 @@ fn render_body(
 		return;
 	}
 	if let Some(message) = app.surface_message() {
+		let message = if app.loading() {
+			format!("{} {message}", loading_indicator())
+		} else {
+			message.to_owned()
+		};
 		frame.render_widget(
 			Paragraph::new(message)
 				.centered()
@@ -224,10 +262,27 @@ fn render_body(
 		);
 		return;
 	}
-	let title = app.anilist_viewer_name().map_or_else(
-		|| app.destination.name().to_owned(),
-		|name| format!("AniList · {name}"),
-	);
+	let title = app.body_title();
+	let list_area = if let Some(tip) = app.home_tip() {
+		let rows = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(2), Constraint::Min(1)])
+			.split(area);
+		frame.render_widget(
+			Paragraph::new(Line::from(vec![
+				Span::styled(
+					"Tip  ",
+					Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+				),
+				Span::raw(tip.to_owned()),
+			]))
+			.wrap(Wrap { trim: true }),
+			rows[0],
+		);
+		rows[1]
+	} else {
+		area
+	};
 	let items = app
 		.items()
 		.iter()
@@ -253,9 +308,9 @@ fn render_body(
 		.highlight_style(
 			Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
 		);
-	frame.render_stateful_widget(list, area, &mut list_state);
+	frame.render_stateful_widget(list, list_area, &mut list_state);
 	app.viewport = list_state.offset();
-	let inner = body_block("").inner(area);
+	let inner = body_block("").inner(list_area);
 	for visible in 0..usize::from(inner.height) {
 		let index = app.viewport + visible;
 		if index >= app.items().len() {
@@ -266,6 +321,13 @@ fn render_body(
 			index,
 		));
 	}
+}
+
+fn loading_indicator() -> &'static str {
+	const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+	let frame =
+		(ANIMATION_STARTED.elapsed().as_millis() / 100) % FRAMES.len() as u128;
+	FRAMES[frame as usize]
 }
 
 fn body_block(title: &str) -> Block<'_> {

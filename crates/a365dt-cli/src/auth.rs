@@ -33,6 +33,12 @@ pub(crate) enum AccessToken {
 	Browser(String),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Presentation {
+	Silent,
+	Detailed,
+}
+
 impl AccessToken {
 	pub(crate) fn value(&self) -> &str {
 		match self {
@@ -44,14 +50,26 @@ impl AccessToken {
 }
 
 pub(crate) fn access_token() -> Result<AccessToken, Error> {
+	access_token_with(Presentation::Detailed)
+}
+
+pub(crate) fn access_token_silently() -> Result<AccessToken, Error> {
+	access_token_with(Presentation::Silent)
+}
+
+fn access_token_with(presentation: Presentation) -> Result<AccessToken, Error> {
+	#[cfg(not(target_os = "macos"))]
+	let _ = presentation;
 	if let Ok(token) = std::env::var("ANIME365_ACCESS_TOKEN")
 		&& !token.trim().is_empty()
 	{
 		return Ok(AccessToken::Environment(token.trim().to_owned()));
 	}
 	#[cfg(target_os = "macos")]
-	if let Some(token) = keychain_token() {
-		ui::note("Using Anime365 access token from macOS Keychain.");
+	if let Some(token) = keychain_token(presentation) {
+		if presentation == Presentation::Detailed {
+			ui::note("Using Anime365 access token from macOS Keychain.");
+		}
 		return Ok(AccessToken::Keychain(token));
 	}
 	browser_access_token()
@@ -76,11 +94,12 @@ fn browser_access_token() -> Result<AccessToken, Error> {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_token() -> Option<String> {
-	if let Some(token) = keychain_token_for(KEYCHAIN_ACCOUNT) {
+fn keychain_token(presentation: Presentation) -> Option<String> {
+	if let Some(token) = keychain_token_for(KEYCHAIN_ACCOUNT, presentation) {
 		return Some(token);
 	}
-	let token = keychain_token_for(app_files::LEGACY_APPLICATION_ID)?;
+	let token =
+		keychain_token_for(app_files::LEGACY_APPLICATION_ID, presentation)?;
 	match set_generic_password(
 		KEYCHAIN_ITEM,
 		KEYCHAIN_ACCOUNT,
@@ -91,19 +110,28 @@ fn keychain_token() -> Option<String> {
 				KEYCHAIN_ITEM,
 				app_files::LEGACY_APPLICATION_ID,
 			);
-			ui::note(
-				"Migrated the Anime365 token to the a365 Keychain account.",
-			);
+			if presentation == Presentation::Detailed {
+				ui::note(
+					"Migrated the Anime365 token to the a365 Keychain account.",
+				);
+			}
 		}
-		Err(error) => ui::warning(format!(
-			"Could not migrate the Anime365 token in macOS Keychain: {error}"
-		)),
+		Err(error) => {
+			if presentation == Presentation::Detailed {
+				ui::warning(format!(
+					"Could not migrate the Anime365 token in macOS Keychain: {error}"
+				));
+			}
+		}
 	}
 	Some(token)
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_token_for(account: &str) -> Option<String> {
+fn keychain_token_for(
+	account: &str,
+	presentation: Presentation,
+) -> Option<String> {
 	let mut search = ItemSearchOptions::new();
 	let result = search
 		.class(ItemClass::generic_password())
@@ -119,9 +147,11 @@ fn keychain_token_for(account: &str) -> Option<String> {
 				}
 				Ok(_) => None,
 				Err(error) => {
-					ui::warning(format!(
-						"Could not read the Anime365 access token from macOS Keychain: {error}"
-					));
+					if presentation == Presentation::Detailed {
+						ui::warning(format!(
+							"Could not read the Anime365 access token from macOS Keychain: {error}"
+						));
+					}
 					None
 				}
 			},
@@ -131,9 +161,11 @@ fn keychain_token_for(account: &str) -> Option<String> {
 		}),
 		Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => None,
 		Err(error) => {
-			ui::warning(format!(
-				"Could not read the Anime365 access token from macOS Keychain: {error}"
-			));
+			if presentation == Presentation::Detailed {
+				ui::warning(format!(
+					"Could not read the Anime365 access token from macOS Keychain: {error}"
+				));
+			}
 			None
 		}
 	}

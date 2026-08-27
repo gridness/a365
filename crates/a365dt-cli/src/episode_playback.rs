@@ -8,10 +8,10 @@ use tokio::sync::watch;
 
 use crate::{
 	api::{Anime365, Series, Translation},
+	continue_watching::{Entry as ContinueWatching, Store as ContinueStore},
 	error::Error,
 	playback, select,
 	telemetry::{self, Recorder, SeriesRecording},
-	ui,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,10 +39,12 @@ pub(crate) struct Request<'a> {
 	pub translations: &'a [Translation],
 	pub track: &'a select::TrackKey,
 	pub first: select::PlannedRelease,
+	pub first_position: playback::Position,
 	pub continuation: Continuation,
 	pub telemetry: &'a Recorder,
 	pub series_recording: SeriesRecording,
 	pub active_playback: Arc<Mutex<Option<watch::Sender<bool>>>>,
+	pub continue_watching: &'a ContinueStore,
 }
 
 pub(crate) async fn run(request: Request<'_>) -> Result<ExitCode, Error> {
@@ -52,41 +54,42 @@ pub(crate) async fn run(request: Request<'_>) -> Result<ExitCode, Error> {
 		translations,
 		track,
 		first,
+		first_position,
 		continuation,
 		telemetry,
 		series_recording,
 		active_playback,
+		continue_watching,
 	} = request;
 	let (cancel, cancellation) = watch::channel(false);
 	*active_playback.lock().unwrap() = Some(cancel);
 	let result = async {
 		let mut release = first;
+		let mut position = first_position;
 		loop {
-			ui::note(format!(
-				"Playing {} — {} in {}p",
-				series.title, release.episode.episode_full, release.height
-			));
-			let title = format!(
-				"{} — {}",
-				series.title, release.episode.episode_full
-			);
+			let continue_entry = ContinueWatching::new(series, &release, track)
+				.with_position(position);
+			continue_watching.save(&continue_entry).await?;
+			let title =
+				format!("{} — {}", series.title, release.episode.episode_full);
 			let started = Instant::now();
-			let outcome = match playback::play(
+			let report = match playback::play(
 				api.clone(),
 				&release,
 				&title,
+				position,
 				cancellation.clone(),
 			)
 			.await
 			{
-				Ok(outcome) => {
+				Ok(report) => {
 					telemetry.record_playback(
 						series,
 						started.elapsed(),
-						telemetry_outcome(outcome),
+						telemetry_outcome(report.outcome),
 						series_recording,
 					);
-					outcome
+					report
 				}
 				Err(error) => {
 					telemetry.record_playback(
@@ -98,7 +101,22 @@ pub(crate) async fn run(request: Request<'_>) -> Result<ExitCode, Error> {
 					return Err(error);
 				}
 			};
-			match continuation_action(outcome, continuation) {
+			if report.outcome == playback::Outcome::NaturalEnd {
+				match next_available_episode(&series.episodes, &release.episode)
+				{
+					Some(episode) => {
+						continue_watching
+							.save(&continue_entry.with_episode(episode))
+							.await?;
+					}
+					None => continue_watching.clear().await?,
+				}
+			} else {
+				continue_watching
+					.save(&continue_entry.with_position(report.position))
+					.await?;
+			}
+			match continuation_action(report.outcome, continuation) {
 				ContinuationAction::Stop(ContinuationStop::Interrupted) => {
 					return Ok(ExitCode::from(130));
 				}
@@ -112,22 +130,16 @@ pub(crate) async fn run(request: Request<'_>) -> Result<ExitCode, Error> {
 				&series.episodes,
 				&release.episode,
 			) else {
-				ui::note("No next whole-number Episode is available.");
 				return Ok(ExitCode::SUCCESS);
 			};
 			let Some(translation) =
 				select::translation_for_track(translations, episode, track)
 			else {
-				ui::note(
-					"Automatic continuation stopped: the selected Translation track does not cover the next Episode.",
-				);
 				return Ok(ExitCode::SUCCESS);
 			};
 			let embed = api.embed(translation.id).await?;
-			let Some(media_url) = media_url_at_height(&embed, release.height) else {
-				ui::note(
-					"Automatic continuation stopped: the chosen resolution is unavailable for the next Episode.",
-				);
+			let Some(media_url) = media_url_at_height(&embed, release.height)
+			else {
 				return Ok(ExitCode::SUCCESS);
 			};
 			release = select::PlannedRelease {
@@ -137,11 +149,22 @@ pub(crate) async fn run(request: Request<'_>) -> Result<ExitCode, Error> {
 				media_url,
 				subtitle_url: embed.subtitles_url,
 			};
+			position = playback::Position::START;
 		}
 	}
 	.await;
 	*active_playback.lock().unwrap() = None;
 	result
+}
+
+fn next_available_episode<'a>(
+	episodes: &'a [crate::api::Episode],
+	current: &crate::api::Episode,
+) -> Option<&'a crate::api::Episode> {
+	episodes
+		.iter()
+		.position(|episode| episode.id == current.id)
+		.and_then(|position| episodes.get(position + 1))
 }
 
 fn media_url_at_height(

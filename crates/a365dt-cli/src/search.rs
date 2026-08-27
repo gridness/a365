@@ -34,9 +34,22 @@ impl Search {
 	}
 
 	pub fn ranked(&self, query: &str) -> Vec<usize> {
+		self.ranked_to(query, None)
+	}
+
+	pub fn ranked_limit(&self, query: &str, limit: usize) -> Vec<usize> {
+		self.ranked_to(query, Some(limit))
+	}
+
+	fn ranked_to(&self, query: &str, limit: Option<usize>) -> Vec<usize> {
 		let query = normalize(query);
 		if query.is_empty() {
-			return (0..self.rows.len()).collect();
+			return (0..limit
+				.map_or(self.rows.len(), |limit| limit.min(self.rows.len())))
+				.collect();
+		}
+		if limit == Some(0) {
+			return Vec::new();
 		}
 		let query = query.iter().map(Query::new).collect::<Vec<_>>();
 		let mut matches = self
@@ -51,15 +64,26 @@ impl Search {
 				Some((index, score))
 			})
 			.collect::<Vec<_>>();
-		matches.sort_unstable_by(|left, right| {
-			right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
-		});
+		if let Some(limit) = limit
+			&& limit < matches.len()
+		{
+			matches.select_nth_unstable_by(limit, compare_matches);
+			matches.truncate(limit);
+		}
+		matches.sort_unstable_by(compare_matches);
 		matches.into_iter().map(|(index, _)| index).collect()
 	}
 
 	pub fn len(&self) -> usize {
 		self.rows.len()
 	}
+}
+
+fn compare_matches(
+	left: &(usize, u32),
+	right: &(usize, u32),
+) -> std::cmp::Ordering {
+	right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
 }
 
 struct Query<'a> {

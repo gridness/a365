@@ -15,8 +15,15 @@ const CALLBACK_ADDRESS: &str = "127.0.0.1:43815";
 const CALLBACK_PATH: &str = "/anilist/callback";
 const TOKEN_PATH: &str = "/anilist/token";
 const AUTHORIZE: &str = "https://anilist.co/api/v2/oauth/authorize";
+const DEFAULT_CLIENT_ID: &str = "49510";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
+
+#[derive(Clone, Copy)]
+enum Presentation {
+	Line,
+	Tui,
+}
 
 pub(super) struct Grant {
 	pub(super) token: String,
@@ -38,15 +45,36 @@ struct Request {
 }
 
 pub(super) async fn login() -> Result<Grant, Error> {
-	let client_id = client_id()?;
+	login_with(Presentation::Line).await
+}
+
+pub(super) async fn login_in_tui() -> Result<Grant, Error> {
+	login_with(Presentation::Tui).await
+}
+
+async fn login_with(presentation: Presentation) -> Result<Grant, Error> {
+	let client_id = client_id();
 	let listener = bind().await?;
 	let relay_nonce = Uuid::now_v7().to_string();
 	let url = authorization_url(&client_id)?;
-	ui::note("Opening AniList authorization in your browser…");
-	if !auth::open_browser(url.as_str()) {
-		ui::warning(format!("Could not open the browser. Visit {url}"));
+	if matches!(presentation, Presentation::Line) {
+		ui::note("Opening AniList authorization in your browser…");
 	}
-	ui::note("Waiting for AniList approval…");
+	if !auth::open_browser(url.as_str()) {
+		match presentation {
+			Presentation::Line => {
+				ui::warning(format!("Could not open the browser. Visit {url}"));
+			}
+			Presentation::Tui => {
+				return Err(Error::new(format!(
+					"Could not open the browser for AniList authorization. Visit {url} and retry from the AniList tab."
+				)));
+			}
+		}
+	}
+	if matches!(presentation, Presentation::Line) {
+		ui::note("Waiting for AniList approval…");
+	}
 	wait_for_grant_until(&listener, &relay_nonce, LOGIN_TIMEOUT).await
 }
 
@@ -62,21 +90,17 @@ async fn wait_for_grant_until(
 
 fn login_timeout_error() -> Error {
 	Error::new(
-		"AniList login timed out after five minutes. Run `a365 anilist login` and try again.",
+		"AniList login timed out after five minutes. Retry from the AniList tab.",
 	)
 }
 
-fn client_id() -> Result<String, Error> {
+fn client_id() -> String {
 	std::env::var("ANILIST_CLIENT_ID")
 		.ok()
 		.or_else(|| option_env!("ANILIST_CLIENT_ID").map(str::to_owned))
 		.filter(|value| !value.trim().is_empty())
 		.map(|value| value.trim().to_owned())
-		.ok_or_else(|| {
-			Error::new(
-				"This build has no AniList Client ID. Run scripts/setup-v3-integrations.sh, then rebuild with ANILIST_CLIENT_ID set.",
-			)
-		})
+		.unwrap_or_else(|| DEFAULT_CLIENT_ID.to_owned())
 }
 
 async fn bind() -> Result<TcpListener, Error> {

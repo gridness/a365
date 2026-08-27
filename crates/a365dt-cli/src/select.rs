@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
 	api::{Embed, Episode, MediaOption, Translation},
 	error::Error,
@@ -13,7 +15,9 @@ struct RangePlan {
 	missing: Vec<u64>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+	Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct TrackKey {
 	pub kind: String,
 	pub language: String,
@@ -33,7 +37,7 @@ pub struct Release {
 	pub embed: Embed,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlannedRelease {
 	pub episode: Episode,
 	pub translation: Translation,
@@ -93,17 +97,6 @@ pub fn choose_episodes(episodes: &[Episode]) -> Result<Vec<Episode>, Error> {
 	}
 }
 
-pub fn choose_episode(episodes: &[Episode]) -> Result<Episode, Error> {
-	if episodes.is_empty() {
-		return Err("This Series has no Episodes.".into());
-	}
-	let rows = episodes
-		.iter()
-		.map(|episode| [episode.episode_full.clone()])
-		.collect::<Vec<_>>();
-	Ok(episodes[ui::choose("Episodes", &rows)?].clone())
-}
-
 pub fn translation_for_track(
 	translations: &[Translation],
 	episode: &Episode,
@@ -119,6 +112,23 @@ pub fn translation_for_track(
 		})
 		.max_by_key(|translation| translation.id)
 		.cloned()
+}
+
+pub(crate) fn tracks_for_episode(
+	translations: &[Translation],
+	episode: &Episode,
+) -> Vec<TrackKey> {
+	translations
+		.iter()
+		.filter(|translation| translation.episode_id == episode.id)
+		.map(|translation| TrackKey {
+			kind: translation.kind.clone(),
+			language: translation.language.clone(),
+			authors: translation.authors_summary.clone(),
+		})
+		.collect::<BTreeSet<_>>()
+		.into_iter()
+		.collect()
 }
 
 pub fn choose_track(
@@ -221,7 +231,7 @@ pub fn choose_resolutions(
 ) -> Result<Vec<PlannedRelease>, Error> {
 	let mut coverage: BTreeMap<u16, usize> = BTreeMap::new();
 	for release in &releases {
-		for height in heights(&release.embed) {
+		for height in available_heights(&release.embed) {
 			*coverage.entry(height).or_default() += 1;
 		}
 	}
@@ -247,7 +257,7 @@ pub fn choose_resolutions(
 	let mut chosen = vec![preferred; releases.len()];
 	let mut fallback_groups: BTreeMap<Vec<u16>, Vec<usize>> = BTreeMap::new();
 	for (index, release) in releases.iter().enumerate() {
-		let options = heights(&release.embed);
+		let options = available_heights(&release.embed);
 		if !options.contains(&preferred) {
 			fallback_groups.entry(options).or_default().push(index);
 		}
@@ -375,7 +385,7 @@ fn number(input: &str) -> Result<f64, String> {
 		.ok_or_else(|| "Episode numbers must be non-negative numbers.".into())
 }
 
-fn heights(embed: &Embed) -> Vec<u16> {
+pub(crate) fn available_heights(embed: &Embed) -> Vec<u16> {
 	let mut heights = embed
 		.download
 		.iter()

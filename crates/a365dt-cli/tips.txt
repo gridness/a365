@@ -15,3 +15,4 @@ Homebrew version recieves updates first and automatically.
 Homebrew version comes with `ffmpeg-full` dependency added for you and shell completions pre-installed.
 All search features of Anime365 are preserved.
 Try searching directly by Anime365 Series URL.
+Connect your anilist account for automatic list sync.

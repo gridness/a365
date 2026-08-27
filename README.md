@@ -62,11 +62,13 @@ Open the full-screen app:
 a365
 ```
 
-The destinations are Home, Search, Timetable, Moments, AniList, and Profile.
+The destinations are Home, Search, Timetable, Moments, AniList, Profile, and
+Config.
 Use the arrow keys, Tab, Enter, and Escape, or click tabs and rows and scroll
-with the mouse. The TUI always restores the terminal before handing media to
-IINA or mpv. Press `/` in AniList to filter by title, list, or status. Moments
-includes category selection and previous/next page navigation.
+with the mouse. Press `/` from a destination without an active search field to
+open Search. The TUI remains visible with a Playing now state while IINA or mpv
+plays, then returns to interaction when the Player closes. Moments includes
+category selection and previous/next page navigation.
 
 Start with a search already entered, or explicitly state that playback is
 wanted:
@@ -107,6 +109,8 @@ through the exact loopback callback
 client refuses GraphQL mutations. AniList's implicit response does not return
 OAuth state, so the callback page instead carries a fresh one-time local relay
 nonce; the access token is validated through `Viewer` before it is saved.
+The same login is available from **Connect AniList** or **Retry AniList
+connection** inside the AniList TUI destination without leaving the TUI.
 Tokens are stored in macOS Keychain or Linux Secret Service;
 `ANILIST_ACCESS_TOKEN` remains available for non-interactive environments.
 When macOS asks whether `a365` may access the

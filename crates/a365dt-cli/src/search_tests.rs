@@ -39,3 +39,16 @@ fn weights_earlier_fields_and_preserves_order_for_ties() {
 
 	assert_eq!(Search::new(&rows).ranked("2024"), vec![1, 2, 0]);
 }
+
+#[test]
+fn limited_ranking_is_the_prefix_of_the_complete_ranking() {
+	let rows = (0..500)
+		.map(|index| [format!("Series {index}"), format!("Alias {index}")])
+		.collect::<Vec<_>>();
+	let search = Search::new(&rows);
+
+	assert_eq!(
+		search.ranked_limit("series", 200),
+		search.ranked("series")[..200],
+	);
+}
